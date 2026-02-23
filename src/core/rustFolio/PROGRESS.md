@@ -82,7 +82,7 @@ the rest of haxall.
 | Phase | Status | Description |
 |-------|--------|-------------|
 | P1 - History persistence | ✅ 2026-02-23 | redb HISTORY + HISTORY_META tables; HIS_READ/HIS_WRITE/HIS_STAT RPCs. Gate: 10200 verifies ALL GREEN. |
-| P2 - Runtime integration | 🔲 pending | Service index registration. hx init/run support. Validate under live connectors, Axon eval, UI. |
+| P2 - Runtime integration | ✅ 2026-02-23 | folio.props backend selection in HxdBoot; hx init + hx run verified; API responding; 6 records persisted across restart. |
 | P3 - Backup | 🔲 pending | FolioBackup impl — consistent redb snapshot (redb has native snapshot API). |
 | P4 - File storage | 🔲 pending | FolioFile — blob table in Rust or Fantom-side disk delegation. |
 | P5 - Hardening | 🔲 pending | Incremental dis updates (O(n)/commit → dirty-set tracking). Reconnect-on-failure. Prefix rename. Benchmarking vs hxFolio. |
