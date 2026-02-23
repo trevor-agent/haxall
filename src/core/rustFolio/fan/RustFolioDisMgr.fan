@@ -3,7 +3,7 @@
 // Licensed under the Academic Free License version 3.0
 //
 // History:
-//   23 Feb 2026  Hathi  Creation (M6)
+//   23 Feb 2026  Hathi  Creation
 //
 
 using concurrent

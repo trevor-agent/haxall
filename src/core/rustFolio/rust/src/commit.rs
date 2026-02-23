@@ -3,7 +3,6 @@
 // The Rust server performs storage-level validation only:
 //   - Existence checks (add: must not exist; update/remove: must exist)
 //   - Concurrent change detection (non-force: compare oldMod vs current mod)
-//   - Persistent/transient tag cross-isolation (M3, skipped for now)
 //
 // Diff pre-validation (FolioUtil.checkDiffs, DiffTagRule, checkTagVal) is
 // done on the Fantom side at Diff construction time.

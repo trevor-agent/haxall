@@ -316,7 +316,7 @@ impl Server {
             let val_bytes = data[val_start..*pos].to_vec();
             items.push((ticks, val_bytes));
         }
-        // opts dict — consumed but not used in P1
+        // opts dict — reserved for future use
         let _opts = read_dict(data, pos)?;
 
         let stat = self.storage.his_write(&id_ref.id, &items)?;
@@ -373,9 +373,8 @@ impl Server {
         Ok(buf)
     }
 
-    /// Enrich the id Ref with a dis string if the record has an explicit "dis" tag.
-    /// For M1/M2: only set dis when there is an explicit "dis" string tag.
-    /// Full disMacro computation is deferred to M6.
+    /// Enrich the id Ref with a dis string derived from the record's "dis" tag.
+    /// Full disMacro computation is handled Fantom-side by RustFolioDisMgr.
     fn enrich_id_dis(&self, dict: &Dict) -> Dict {
         let mut d = dict.clone();
         if let Some(Val::Ref(id_ref)) = dict.get("id") {

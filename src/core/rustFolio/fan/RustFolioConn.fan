@@ -3,7 +3,7 @@
 // Licensed under the Academic Free License version 3.0
 //
 // History:
-//   23 Feb 2026  Hathi  Creation (M1)
+//   23 Feb 2026  Hathi  Creation
 //
 
 using concurrent
@@ -16,10 +16,9 @@ using folio
 ** RustFolioConn manages the TCP connection to the rust-folio process
 ** and sends/receives framed messages using the binary protocol.
 **
-** Design note: Unix domain sockets are not available in Fantom's Socket
-** class. We use TCP on 127.0.0.1 with an ephemeral port assigned by the
-** OS and communicated to us via the process's stdout ("READY:{port}").
-** See PROGRESS.md DEV-003 for rationale.
+** Design note: Fantom's Socket class is TCP-only (no Unix domain sockets).
+** We use TCP on 127.0.0.1 with an ephemeral port assigned by the OS
+** and communicated via a port file ({dir}/.rust-folio.port).
 **
 ** Thread safety: this class is NOT thread-safe. All calls must be made
 ** from the folio actor thread (single-threaded request processing).

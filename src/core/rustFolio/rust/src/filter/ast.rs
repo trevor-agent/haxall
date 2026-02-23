@@ -60,8 +60,8 @@ pub enum Filter {
     And(Box<Filter>, Box<Filter>),
     /// a or b
     Or(Box<Filter>, Box<Filter>),
-    /// isSpec(specName) — treated as false for now (M2: best-effort)
+    /// isSpec(specName) — requires Xeto schema knowledge; treated as false
     IsSpec(String),
-    /// isSymbol(^sym) — treated as false for now
+    /// isSymbol(^sym) — treated as false
     IsSymbol(String),
 }

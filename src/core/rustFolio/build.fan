@@ -4,7 +4,7 @@
 // Licensed under the Academic Free License version 3.0
 //
 // History:
-//   23 Feb 2026  Hathi  Creation (M0 scaffold)
+//   23 Feb 2026  Hathi  Creation
 //
 
 using build
@@ -34,10 +34,6 @@ class Build : BuildPod
                "haystack @{hx.depend}",
                "folio @{hx.depend}"]
     srcDirs = [`fan/`]
-    // Index registration enabled at M1+M2 combined milestone.
-    // M2 provides functional filter evaluation, readAll, readCount — all
-    // operations tested by testFolio are now implemented. Index was deferred
-    // from M0/M1 to avoid UnsupportedErr propagation breaking flatfile/hx gates.
     index = ["testFolio.impl": "rustFolio::RustFolioTestImpl"]
   }
 }

@@ -3,7 +3,7 @@
 // Licensed under the Academic Free License version 3.0
 //
 // History:
-//   23 Feb 2026  Hathi  Creation (M1)
+//   23 Feb 2026  Hathi  Creation
 //
 
 using concurrent
@@ -20,7 +20,7 @@ using folio
 ** without introducing locks or races. Instead, rust-folio writes its TCP
 ** port number to {dir}/.rust-folio.port after binding, and this class polls
 ** for that file. The file write is atomic from the OS perspective and safe
-** to poll from any thread. See PROGRESS.md DEV-003 for full rationale.
+** to poll from any thread.
 **
 class RustFolioProcess
 {

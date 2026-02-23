@@ -3,7 +3,7 @@
 // Licensed under the Academic Free License version 3.0
 //
 // History:
-//   23 Feb 2026  Hathi  Creation (M0 scaffold, M2 activation)
+//   23 Feb 2026  Hathi  Creation
 //
 
 using xeto
@@ -12,9 +12,6 @@ using folio
 
 **
 ** RustFolioTestImpl plugs RustFolio into the AbstractFolioTest harness.
-**
-** Index registration was deferred from M0/M1 until M2, when filter
-** evaluation and ReadAll are functional. Enabled in build.fan at M2.
 **
 class RustFolioTestImpl : FolioTestImpl
 {
@@ -25,10 +22,10 @@ class RustFolioTestImpl : FolioTestImpl
   ** Transient commits fully implemented in Rust (RecordCache transient layer)
   override Bool supportsTransient() { true }
 
-  ** History fully implemented Fantom-side (RustFolioHis in-memory map)
+  ** History fully implemented (RustFolioHis, backed by redb)
   override Bool supportsHis() { true }
 
-  ** Id prefix rename — defer until wire protocol handles it
+  ** Id prefix rename not implemented.
   override Bool supportsIdPrefixRename() { false }
 
   **

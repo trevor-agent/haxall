@@ -30,7 +30,7 @@ fn match_filter(f: &Filter, rec: &Dict, cache: &RecordCache) -> bool {
         Filter::And(a, b) => match_filter(a, rec, cache) && match_filter(b, rec, cache),
         Filter::Or(a, b)  => match_filter(a, rec, cache) || match_filter(b, rec, cache),
 
-        // isSpec / isSymbol: requires Xeto knowledge — not supported in M2, treated as false
+        // isSpec / isSymbol: requires Xeto schema knowledge — not supported, treated as false
         Filter::IsSpec(_)   => false,
         Filter::IsSymbol(_) => false,
     }

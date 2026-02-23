@@ -18,35 +18,16 @@ The architecture is a **two-process model**:
 │    │                                │
 │    ├─ RustFolioProcess  ──spawn──►  │  ┌─────────────────────────────┐
 │    ├─ RustFolioConn  ────TCP───►    │  │  rust-folio (native binary) │
-│    ├─ RustFolioHis (in-memory)      │  │                             │
+│    ├─ RustFolioHis                  │  │                             │
 │    └─ RustFolioDisMgr (cache)       │  │  redb B-tree database       │
 │                                     │  │  Filter eval (native)       │
-│  RustFolioTestImpl ◄── testFolio ─  │  │  History table (scaffolded) │
+│  RustFolioTestImpl ◄── testFolio ─  │  │  History storage (redb)     │
 └─────────────────────────────────────┘  └─────────────────────────────┘
 ```
 
-The Fantom pod manages lifecycle, watches, passwords, history, and display
-strings. The Rust process owns the persistent record store and filter
-evaluation.
-
----
-
-## Status
-
-**All testFolio milestones complete. Gate: 10,195 verifies — ALL GREEN.**
-
-| Milestone | Status | Verifies |
-|-----------|--------|----------|
-| M0 — Scaffold | ✅ | — |
-| M1 — CRUD + protocol | ✅ | |
-| M2 — Filters + readAll | ✅ | 9,921 |
-| M3 — Transient commits | ✅ | 9,921 |
-| M4 — Hooks (preCommit / postCommit) | ✅ | 9,921 |
-| M5 — History (HisTest) | ✅ | 10,164 |
-| M6 — Display strings (DisTest) | ✅ | 10,195 |
-| M7 — No deferred no-ops | ✅ | 10,195 |
-
-See `PROGRESS.md` for full milestone history and deviation notes.
+The Fantom pod manages lifecycle, watches, passwords, and display strings.
+The Rust process owns the persistent record store, filter evaluation, and
+history storage.
 
 ---
 
@@ -61,7 +42,7 @@ rustFolio/
 │   ├── RustFolio.fan           main Folio subclass
 │   ├── RustFolioConn.fan       TCP binary protocol client
 │   ├── RustFolioDisMgr.fan     disMacro evaluation + Ref.disVal cache
-│   ├── RustFolioHis.fan        in-memory history (HisTest-complete)
+│   ├── RustFolioHis.fan        history implementation (backed by redb)
 │   ├── RustFolioProcess.fan    Rust subprocess lifecycle
 │   ├── RustFolioRec.fan        FolioRec wrapper over Dict
 │   ├── RustFolioSerializer.fan binary encode / decode for all Haystack types
@@ -100,14 +81,14 @@ Communication is a custom **binary wire format** over a TCP loopback socket.
 - The Rust process binds an ephemeral port, writes it to
   `{dir}/.rust-folio.port`, and prints `READY:{port}` to stdout.
 - The Fantom process reads the port file and connects.
-- Every request is: `[u8 msg_type][u16 opcode][u32 payload_len][payload]`
-- Every response is: `[u8 msg_type][u16 opcode][u32 payload_len][payload]` or
-  an error frame.
+- Every request is: `[u32 total_len][u8 msg_type][u16 opcode][payload]`
+- Every response mirrors the same frame structure.
 
 Opcodes: `CLOSE`, `SYNC`, `CUR_VER`, `FLUSH_MODE`, `FLUSH`, `READ_BY_ID`,
-`READ_BY_IDS`, `READ_ALL`, `READ_COUNT`, `COMMIT_ALL`.
+`READ_BY_IDS`, `READ_ALL`, `READ_COUNT`, `COMMIT_ALL`, `HIS_READ`,
+`HIS_WRITE`, `HIS_STAT`.
 
-### Ref.dis enrichment (M6)
+### Ref.dis enrichment
 
 hxFolio uses shared in-memory `Rec` objects with a single mutable `Ref.disVal`
 per record — updating A's dis automatically propagates to any dict holding `@A`.
@@ -141,7 +122,9 @@ cargo build --release
 # binary: target/release/rust-folio
 ```
 
-The compiled binary is embedded/located by `RustFolioProcess.fan` at runtime.
+The compiled binary is located by `RustFolioProcess.fan` at runtime. It searches
+(in order): `$FAN_HOME/bin/`, the dev cargo release path, the current directory,
+and finally the system PATH.
 
 ### Build the Fantom pod
 
@@ -149,7 +132,7 @@ The compiled binary is embedded/located by `RustFolioProcess.fan` at runtime.
 fan build.fan compile
 ```
 
-Or build the whole Haxall tree (rustFolio is in `src/core/build.fan`):
+Or build the whole Haxall tree (rustFolio is included in `src/core/build.fan`):
 
 ```bash
 fan src/core/build.fan
@@ -161,33 +144,36 @@ fan src/core/build.fan
 fant testFolio
 ```
 
-Expected: `All tests passed! [7 types, 23 methods, 10195 verifies]`
+Expected: `All tests passed! [7 types, 23 methods, 10200 verifies]`
 
 ---
 
-## Known Limitations (Pre-Production)
+## Runtime Integration
 
-### Not yet integrated with the Haxall runtime (`hx init` / `hx run`)
+rustFolio is wired into the Haxall runtime via `{dir}/folio.props`:
 
-rustFolio passes the testFolio gate but is **not yet wired as a selectable
-folio backend** in the Haxall runtime. hxFolio remains the default. Wiring
-rustFolio into the runtime requires:
+```bash
+# Create project with rustFolio backend
+mkdir myproject
+echo "backend=rustFolio" > myproject/folio.props
 
-- A service registration index entry (not just `testFolio.impl`)
-- An `HxFolioFactory` equivalent or runtime configuration hook
-- Validation under live runtime conditions (connectors, Axon eval, UI reads)
+# From inside the haxall/ dev directory:
+fan hx init -headless -suUser admin -suPass <password> -httpPort 8081 myproject
+fan hx run myproject
+```
 
-### History is in-memory only
+`HxdBoot.initFolio()` reads `folio.props` and uses Fantom reflection to call
+`RustFolio.open(config)` — no compile-time dependency on rustFolio from hxd.
+Omitting `folio.props` (or setting `backend=hxFolio`) falls back to the default.
 
-`RustFolioHis` stores all time-series data in a Fantom-side `AtomicRef` map.
-**History is lost on restart.** The redb `HISTORY` table is scaffolded and the
-binary protocol supports history ops, but the Rust-side persistence path is not
-yet implemented.
+---
+
+## Known Limitations
 
 ### Backup and file storage unsupported
 
 `folio.backup()` and `folio.file()` throw `UnsupportedErr`. Neither is
-exercised by the testFolio gate but both are exercised by production runtimes.
+exercised by the testFolio gate, but both are used by production runtimes.
 
 ### Single-connection model
 
@@ -200,7 +186,7 @@ connect-with-retry strategy in `RustFolioConn`.
 `PrefixTest` skips the `<Prefix id rename unsupported>` case.
 hxFolio supports renaming all record ids when the project's id prefix changes.
 This requires iterating all records and rewriting their ids atomically — a
-non-trivial Rust-side operation not yet implemented.
+non-trivial Rust-side operation that is not yet implemented.
 
 ### Full-sweep dis update after every commit
 
@@ -212,31 +198,40 @@ DisMgr that sets `dis` on records at commit time.
 
 ---
 
-## Roadmap to Production
+## Design Notes
 
-See `PROGRESS.md` for milestone history. Remaining work, roughly prioritised:
+### TCP instead of Unix domain sockets
 
-| Phase | Work |
-|-------|------|
-| **P1 — History persistence** | Move history write/read to Rust (redb HISTORY table already scaffolded). Retire in-memory `RustFolioHis`. |
-| **P2 — Runtime integration** | Service index registration. `hx init` flag / project config to select rustFolio. Validation under live runtime. |
-| **P3 — Backup** | Implement `FolioBackup` — at minimum a consistent snapshot of the redb file. |
-| **P4 — File storage** | Implement `FolioFile` — either Rust-side blob table or Fantom-side delegation to disk. |
-| **P5 — Perf + hardening** | Benchmarking vs hxFolio. Incremental dis updates. Reconnect-on-failure. Prefix rename support. Concurrent-client support if needed. |
+Fantom's `Socket` class is TCP-only — there is no Unix domain socket API.
+rustFolio uses `127.0.0.1:0` (ephemeral port) with a port-file rendezvous
+(`{dir}/.rust-folio.port`). Security is equivalent to a Unix socket since
+the listener is loopback-only.
+
+### History storage in redb
+
+History items are persisted in redb's `HISTORY` table using a composite key:
+`[u16 id_len][id_bytes][u64 biased_ticks]`. The tick bias (`XOR 0x8000...`)
+maps signed i64 to u64 so that big-endian byte order yields natural chronological
+ordering. Stats (size, first, last) are cached in `HISTORY_META` and updated
+atomically on every write.
+
+### Fantom-side dis propagation
+
+Ref.disVal is set by `RustFolioDisMgr` rather than by the Rust process because
+disMacro evaluation requires resolving cross-record references — a query-level
+operation that is simpler to implement in Fantom where the full record set is
+already available post-read.
 
 ---
 
-## Design Deviations from hxFolio
+## Future Improvements
 
-See `PROGRESS.md` §Deviations for the full list. Key ones:
-
-- **DEV-003:** Fantom `Socket` is TCP-only — no Unix domain sockets. We use
-  `127.0.0.1:0` (ephemeral port) with a port-file rendezvous.
-- **DEV-006:** History stored Fantom-side (in-memory) rather than in redb.
-  Allows M5 to pass the gate without Rust-side history ops.
-- **DEV-007:** dis propagation uses a Fantom-side id→dis cache + `enrichRefs`
-  rather than shared in-memory Ref objects (which don't exist in the decoupled
-  process model).
+- **Backup support** — `FolioBackup` via redb's native snapshot API.
+- **File storage** — `FolioFile` via a Rust-side blob table or Fantom-side disk delegation.
+- **Incremental dis updates** — reduce O(n)/commit cost with dirty-set tracking.
+- **Reconnect-on-failure** — automatic reconnect in `RustFolioConn` after unexpected disconnect.
+- **Prefix rename** — atomic id rewrite across all records in redb.
+- **Performance benchmarks** — compare throughput and latency against hxFolio at scale.
 
 ---
 

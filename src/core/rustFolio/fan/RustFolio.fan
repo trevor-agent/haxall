@@ -3,7 +3,7 @@
 // Licensed under the Academic Free License version 3.0
 //
 // History:
-//   23 Feb 2026  Hathi  Creation (M0 scaffold, M1 implementation)
+//   23 Feb 2026  Hathi  Creation
 //
 
 using concurrent
@@ -23,9 +23,7 @@ using folio
 **   - PasswordStore (passwords.props file)
 **   - FolioWatch and watch lifecycle
 **   - Pre/post-commit hook dispatch (hook identity required by tests)
-**   - Backup and file storage (not supported in v1)
-**
-** See PROGRESS.md for milestone status and deviations.
+**   - Backup and file storage (not yet implemented)
 **
 const class RustFolio : Folio
 {
@@ -61,7 +59,7 @@ const class RustFolio : Folio
     connRef    = AtomicRef(Unsafe(conn))
     processRef = AtomicRef(Unsafe(proc))
 
-    // History implementation (Fantom-side in-memory, see RustFolioHis)
+    // History implementation (see RustFolioHis)
     hisImpl = RustFolioHis(this)
 
     // Display string manager — compute initial dis cache on open so that
@@ -83,10 +81,10 @@ const class RustFolio : Folio
   ** Process manager for the rust-folio subprocess
   private const AtomicRef processRef
 
-  ** History implementation (Fantom-side in-memory)
+  ** History implementation
   private const RustFolioHis hisImpl
 
-  ** Display string manager (Fantom-side cache, M6)
+  ** Display string manager (Fantom-side cache)
   private const RustFolioDisMgr disMgr
 
   private RustFolioConn? conn() { (connRef.val as Unsafe)?.val }
@@ -145,22 +143,22 @@ const class RustFolio : Folio
   }
 
 //////////////////////////////////////////////////////////////////////////
-// Subsystems (Fantom-side or unsupported in v1)
+// Subsystems
 //////////////////////////////////////////////////////////////////////////
 
-  ** Backup — not supported in v1.
+  ** Backup — not yet implemented.
   override FolioBackup backup()
   {
-    throw UnsupportedErr("RustFolio.backup: not supported in v1")
+    throw UnsupportedErr("RustFolio.backup not implemented")
   }
 
-  ** History — in-memory Fantom-side implementation (M5).
+  ** History — backed by redb via RustFolioHis.
   override FolioHis his() { hisImpl }
 
-  ** File storage — not supported in v1.
+  ** File storage — not yet implemented.
   override FolioFile file()
   {
-    throw UnsupportedErr("RustFolio.file: not supported in v1")
+    throw UnsupportedErr("RustFolio.file not implemented")
   }
 
 //////////////////////////////////////////////////////////////////////////
@@ -239,7 +237,7 @@ const class RustFolio : Folio
 
   **
   ** Inject hisSize, hisStart, hisEnd into a record dict using the
-  ** Rust-backed stats cache (P1).  These are 'never' tags that cannot
+  ** Rust-backed stats cache.  These are 'never' tags that cannot
   ** flow through a normal Diff — the folio implementation owns them.
   ** On cache miss a lazy HIS_STAT RPC is issued; subsequent reads use
   ** the cached value.  Timestamps are converted to the record's tz so

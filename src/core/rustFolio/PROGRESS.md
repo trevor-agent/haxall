@@ -47,11 +47,10 @@ Hook dispatch (pre/post commit with `cxInfo`) was straightforward to add alongsi
 path. Implemented `RustFolioCommitEvent` and full `FolioHooks` dispatch in `doCommitAllAsync`.
 No separate M4 milestone needed; `testHooks` passes as part of the M2 gate.
 
-### DEV-005 — M6 (disMacro/syncDis) deferred
+### DEV-005 — M6 (disMacro/syncDis) — resolved at M6
 `DisTest` exercises `disMacro` pattern evaluation and `syncDis` propagation through ref chains.
-`verifyDictDis` and `verifyIdDis` are overridden as no-ops in `RustFolioTestImpl` to allow
-DisTest's commit/read operations to run without blocking the gate. Full M6 implementation
-(server-side dis sync) remains pending.
+Initially deferred as no-ops. Fully implemented at M6 via `RustFolioDisMgr` (see DEV-007).
+No no-ops remain in `RustFolioTestImpl`.
 
 ### DEV-006 — Ref normalization with dis lookup
 During commit, all Ref-valued tags in changes are normalized to absolute form. Relative Refs
@@ -98,6 +97,32 @@ History is lost on restart. The redb `HISTORY` table is scaffolded but unused.
 - Fantom: `RustFolioConn` gets `hisWrite`, `hisRead`, `hisStat` methods. `RustFolioHis` becomes a thin Rust RPC wrapper. Stats cache (`Str:RustHisStat AtomicRef`) replaces in-memory items; used by `augmentHisTags`.
 - Span semantics (1 item before span.start, up to 2 after span.end) handled Rust-side for efficiency.
 - `FolioUtil.hisWriteCheck` still called Fantom-side for validation/normalization before sending to Rust.
+
+### P2 Design — Runtime Integration
+
+**Problem:** `HxdBoot.initFolio()` hardcodes `HxFolio.open(config)`. No mechanism to swap backend.
+
+**Approach:**
+- Modified `HxdBoot.initFolio()` to check `{dir}/folio.props` for a `backend` key.
+- If `backend=rustFolio`, uses Fantom reflection (`Type.find("rustFolio::RustFolio")`) to call `RustFolio.open(config)`.
+- Reflection avoids adding `rustFolio` as a compile-time dependency of `hxd`. Pod must be on classpath (it is when built with haxall).
+- Default: `backend=hxFolio` (or absent `folio.props`) → `HxFolio.open` as before. Fully backward compatible.
+
+**Usage:**
+```bash
+mkdir myproject
+echo "backend=rustFolio" > myproject/folio.props
+fan hx init -headless -suUser admin -suPass <pw> -httpPort 8081 myproject
+fan hx run myproject
+```
+
+**Integration test results (2026-02-23):**
+- `hx init`: Rust spawned, TCP connected, 6 records committed, Steady state ✓
+- `hx run` (after kill+restart): `records=6 cur_ver=4` (redb persisted across restart) ✓
+- Haystack v3 API: `GET /api/sys/about` → Haxall 4.0.5 ✓
+- `GET /api/sys/read?filter=id` → all 6 records returned via API ✓
+
+**Modified file:** `src/core/hxd/fan/HxdBoot.fan` (22 lines added to `initFolio()`)
 
 ## Build Notes
 

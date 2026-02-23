@@ -3,8 +3,7 @@
 // Licensed under the Academic Free License version 3.0
 //
 // History:
-//   23 Feb 2026  Hathi  Creation (M5)
-//   23 Feb 2026  Hathi  P1 - moved storage to Rust/redb, retired in-memory map
+//   23 Feb 2026  Hathi  Creation
 //
 
 using concurrent
@@ -106,7 +105,7 @@ const class RustFolioHis : FolioHis
     // Force unitSet: items written to a record with a unit always get the unit
     opts = Etc.dictSet(opts, "unitSet", Marker.val)
 
-    // Validate, sort, dedup, normalize (Fantom-side — no change from M5)
+    // Validate, sort, dedup, normalize (Fantom-side)
     normalized := FolioUtil.hisWriteCheck(rec, items, opts)
 
     // Persist to Rust
