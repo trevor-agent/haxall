@@ -81,7 +81,7 @@ the rest of haxall.
 
 | Phase | Status | Description |
 |-------|--------|-------------|
-| P1 - History persistence | 🔄 in progress | Move history write/read to Rust (redb HISTORY table). Retire in-memory RustFolioHis. |
+| P1 - History persistence | ✅ 2026-02-23 | redb HISTORY + HISTORY_META tables; HIS_READ/HIS_WRITE/HIS_STAT RPCs. Gate: 10200 verifies ALL GREEN. |
 | P2 - Runtime integration | 🔲 pending | Service index registration. hx init/run support. Validate under live connectors, Axon eval, UI. |
 | P3 - Backup | 🔲 pending | FolioBackup impl — consistent redb snapshot (redb has native snapshot API). |
 | P4 - File storage | 🔲 pending | FolioFile — blob table in Rust or Fantom-side disk delegation. |
