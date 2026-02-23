@@ -65,6 +65,28 @@ class HxdBoot : HxBoot
       it.dir  = this.dbDir
       it.pool = ActorPool { it.name = "Hxd-Folio" }
     }
+
+    // Check {dir}/folio.props for optional backend override.
+    // Supported values:
+    //   backend=hxFolio    (default — hxFolio flat-file implementation)
+    //   backend=rustFolio  (Rust/redb-backed implementation)
+    //
+    // We use reflection to avoid a compile-time dependency on rustFolio.
+    // The rustFolio pod must be on the classpath (it is when built alongside haxall).
+    backendFile := this.dir + `folio.props`
+    if (backendFile.exists)
+    {
+      backend := backendFile.readProps.get("backend", "hxFolio")
+      if (backend != "hxFolio")
+      {
+        t := Type.find("${backend}::${backend.capitalize}", false)
+        if (t == null)
+          throw Err("folio.props backend pod/type not found: ${backend}::${backend.capitalize}")
+        log.info("initFolio: using backend '${backend}'")
+        return t.method("open").call(config)
+      }
+    }
+
     return HxFolio.open(config)
   }
 
