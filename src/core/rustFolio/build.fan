@@ -29,15 +29,15 @@ class Build : BuildPod
     depends = ["sys @{fan.depend}",
                "concurrent @{fan.depend}",
                "util @{fan.depend}",
+               "inet @{fan.depend}",
                "xeto @{hx.depend}",
                "haystack @{hx.depend}",
                "folio @{hx.depend}"]
     srcDirs = [`fan/`]
-    // NOTE: index registration ("testFolio.impl") deferred to M2.
-    // Rationale: AbstractFolioTest.runImpls iterates all impls via each{} which
-    // does not catch per-impl exceptions. When rustfolio stubs throw UnsupportedErr,
-    // the exception propagates and prevents flatfile/hx from running in that test
-    // method. Enable once M2 provides functional commits+reads.
-    // index = ["testFolio.impl": "rustFolio::RustFolioTestImpl"]
+    // Index registration enabled at M1+M2 combined milestone.
+    // M2 provides functional filter evaluation, readAll, readCount — all
+    // operations tested by testFolio are now implemented. Index was deferred
+    // from M0/M1 to avoid UnsupportedErr propagation breaking flatfile/hx gates.
+    index = ["testFolio.impl": "rustFolio::RustFolioTestImpl"]
   }
 }

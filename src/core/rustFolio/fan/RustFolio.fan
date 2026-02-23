@@ -3,7 +3,7 @@
 // Licensed under the Academic Free License version 3.0
 //
 // History:
-//   23 Feb 2026  Hathi  Creation (M0 scaffold)
+//   23 Feb 2026  Hathi  Creation (M0 scaffold, M1 implementation)
 //
 
 using concurrent
@@ -14,12 +14,18 @@ using folio
 **
 ** RustFolio: Rust-backed Folio implementation.
 **
-** The Rust process handles record persistence, filter evaluation,
-** history storage, and display string computation. It communicates
-** with the Fantom/Haxall ecosystem via a binary protocol over
-** Unix domain sockets.
+** The rust-folio binary handles record persistence (redb), filter
+** evaluation, history storage, and display string computation.
+** It communicates with the Fantom/Haxall ecosystem via a binary
+** protocol over a loopback TCP socket (ephemeral port, 127.0.0.1 only).
 **
-** Milestone status: M0 scaffold — all storage methods stubbed.
+** Scope boundary (what stays Fantom-side):
+**   - PasswordStore (passwords.props file)
+**   - FolioWatch and watch lifecycle
+**   - Pre/post-commit hook dispatch (hook identity required by tests)
+**   - Backup and file storage (not supported in v1)
+**
+** See PROGRESS.md for milestone status and deviations.
 **
 const class RustFolio : Folio
 {
@@ -29,69 +35,102 @@ const class RustFolio : Folio
 //////////////////////////////////////////////////////////////////////////
 
   **
-  ** Open database for given configuration.
+  ** Open database for given configuration. Spawns the rust-folio process
+  ** and connects to it.
   **
   static Folio open(FolioConfig config)
   {
-    return make(config)
+    folio := make(config)
+    return folio
   }
 
-  ** Constructor for open
   private new make(FolioConfig config) : super(config)
   {
-    this.passwords = PasswordStore.open(dir+`passwords.props`, config)
+    passwords = PasswordStore.open(dir + `passwords.props`, config)
+
+    // Spawn the Rust subprocess
+    proc := RustFolioProcess(dir)
+    port := proc.start(config)
+
+    // Connect over TCP
+    conn := RustFolioConn()
+    conn.connect(port)
+
+    // Wrap mutable objects in Unsafe so they can be stored in AtomicRef.
+    // Unsafe is the Fantom-idiomatic way to hold mutable state in a const class.
+    connRef    = AtomicRef(Unsafe(conn))
+    processRef = AtomicRef(Unsafe(proc))
   }
 
 //////////////////////////////////////////////////////////////////////////
-// Identity
+// Fields
 //////////////////////////////////////////////////////////////////////////
 
   ** Password storage (managed Fantom-side, no Rust involvement)
   const override PasswordStore passwords
 
+  ** Connection to the rust-folio process
+  private const AtomicRef connRef
+
+  ** Process manager for the rust-folio subprocess
+  private const AtomicRef processRef
+
+  private RustFolioConn? conn() { (connRef.val as Unsafe)?.val }
+  private RustFolioProcess? rustProcess() { (processRef.val as Unsafe)?.val }
+
 //////////////////////////////////////////////////////////////////////////
 // Storage Metadata
 //////////////////////////////////////////////////////////////////////////
 
-  ** Current persistent version — implemented in M1
+  ** Current persistent version.
   override Int curVer()
   {
-    throw UnsupportedErr("RustFolio.curVer: not implemented until M1")
+    c := conn ?: throw ShutdownErr("$typeof.name is closed")
+    return c.readCurVer
   }
 
-  ** Flush mode — implemented in M1
+  ** Flush mode — get or set.
   override Str flushMode
   {
-    get { throw UnsupportedErr("RustFolio.flushMode.get: not implemented until M1") }
-    set { throw UnsupportedErr("RustFolio.flushMode.set: not implemented until M1") }
+    get
+    {
+      c := conn ?: throw ShutdownErr("$typeof.name is closed")
+      return c.readFlushMode
+    }
+    set
+    {
+      c := conn ?: throw ShutdownErr("$typeof.name is closed")
+      c.setFlushMode(it)
+    }
   }
 
-  ** Flush dirty data — implemented in M1
+  ** Flush (redb fsync is automatic on commit).
   override Void flush()
   {
-    throw UnsupportedErr("RustFolio.flush: not implemented until M1")
+    c := conn ?: throw ShutdownErr("$typeof.name is closed")
+    c.sendFlush
   }
 
 //////////////////////////////////////////////////////////////////////////
-// Subsystems
+// Subsystems (Fantom-side or unsupported in v1)
 //////////////////////////////////////////////////////////////////////////
 
-  ** Backup — not supported in v1
+  ** Backup — not supported in v1.
   override FolioBackup backup()
   {
-    throw UnsupportedErr("RustFolio.backup: not supported")
+    throw UnsupportedErr("RustFolio.backup: not supported in v1")
   }
 
-  ** History — implemented in M5
+  ** History — implemented in M5.
   override FolioHis his()
   {
     throw UnsupportedErr("RustFolio.his: not implemented until M5")
   }
 
-  ** File storage — not supported in v1
+  ** File storage — not supported in v1.
   override FolioFile file()
   {
-    throw UnsupportedErr("RustFolio.file: not supported")
+    throw UnsupportedErr("RustFolio.file: not supported in v1")
   }
 
 //////////////////////////////////////////////////////////////////////////
@@ -99,51 +138,151 @@ const class RustFolio : Folio
 //////////////////////////////////////////////////////////////////////////
 
   **
-  ** Close the database asynchronously.
-  ** Returns a valid FolioFuture so teardown works cleanly.
-  ** In M1 this will send a Close opcode to the Rust process and wait.
+  ** Close the database. Sends Close opcode to rust-folio, waits for
+  ** the process to exit, then clears the connection.
   **
   override protected FolioFuture doCloseAsync()
   {
+    // Swap out references so subsequent calls see a closed state
+    c    := (connRef.getAndSet(null)    as Unsafe)?.val as RustFolioConn
+    proc := (processRef.getAndSet(null) as Unsafe)?.val as RustFolioProcess
+
+    try
+    {
+      if (c != null) c.close
+    }
+    catch (Err e) {}
+
+    try
+    {
+      if (proc != null)
+      {
+        exitCode := proc.waitForExit
+        if (exitCode == -1)
+        {
+          // Process did not exit cleanly — force kill
+          proc.kill
+        }
+      }
+    }
+    catch (Err e) {}
+
     return FolioFuture.makeSync(CountFolioRes(0))
   }
 
 //////////////////////////////////////////////////////////////////////////
-// Reads (stubbed, implemented in M1/M2)
+// Reads
 //////////////////////////////////////////////////////////////////////////
 
   override protected FolioRec? doReadRecById(Ref id)
   {
-    throw UnsupportedErr("RustFolio.doReadRecById: not implemented until M1")
+    c := conn ?: throw ShutdownErr("$typeof.name is closed")
+    dict := c.readById(id)
+    if (dict == null) return null
+    return RustFolioRec(dict)
   }
 
   override protected FolioFuture doReadByIds(Ref[] ids)
   {
-    throw UnsupportedErr("RustFolio.doReadByIds: not implemented until M1")
+    c := conn ?: throw ShutdownErr("$typeof.name is closed")
+    dicts := c.readByIds(ids)
+    recs   := Dict?[,]
+    errMsg := ""
+    dicts.each |d, i|
+    {
+      if (d != null)
+        recs.add(RustFolioRec(d).dict)
+      else
+      {
+        recs.add(null)
+        if (errMsg.isEmpty) errMsg = ids[i].toStr
+      }
+    }
+    return FolioFuture.makeSync(ReadFolioRes(errMsg, !errMsg.isEmpty, recs))
   }
 
   override protected FolioFuture doReadAll(Filter filter, Dict? opts)
   {
-    throw UnsupportedErr("RustFolio.doReadAll: not implemented until M2")
+    c    := conn ?: throw ShutdownErr("$typeof.name is closed")
+    recs := c.readAll(filter, opts)
+    return FolioFuture.makeSync(ReadFolioRes("", false, recs))
   }
 
   override protected Int doReadCount(Filter filter, Dict? opts)
   {
-    throw UnsupportedErr("RustFolio.doReadCount: not implemented until M2")
+    c := conn ?: throw ShutdownErr("$typeof.name is closed")
+    return c.readCount(filter, opts)
   }
 
   override protected Obj? doReadAllEachWhile(Filter filter, Dict? opts, |Dict->Obj?| f)
   {
-    throw UnsupportedErr("RustFolio.doReadAllEachWhile: not implemented until M2")
+    c    := conn ?: throw ShutdownErr("$typeof.name is closed")
+    recs := c.readAll(filter, opts)
+    return recs.eachWhile(f)
   }
 
 //////////////////////////////////////////////////////////////////////////
-// Commits (stubbed, implemented in M1)
+// Commits
 //////////////////////////////////////////////////////////////////////////
 
   override protected FolioFuture doCommitAllAsync(Diff[] diffs, Obj? cxInfo)
   {
-    throw UnsupportedErr("RustFolio.doCommitAllAsync: not implemented until M1")
+    c     := conn ?: throw ShutdownErr("$typeof.name is closed")
+    h     := hooks
+
+    // Build pre-commit events and call preCommit (may throw to cancel)
+    events := RustFolioCommitEvent[,]
+    diffs.each |orig|
+    {
+      oldRec := orig.isAdd ? null : readById(orig.id, false)
+      events.add(RustFolioCommitEvent(orig, oldRec, cxInfo))
+    }
+    events.each |e| { h.preCommit(e) }
+
+    // Send diffs to Rust, get back (id, oldMod, newMod, oldRec, newRec) per diff
+    results := c.commitAll(diffs)
+
+    // Reconstruct completed Diffs from the result + original diff metadata
+    completed := Diff[,]
+    diffs.each |orig, i|
+    {
+      r := results[i]
+      completed.add(Diff.makeAll(
+        r.id,
+        r.oldMod,
+        r.oldRec,
+        r.newMod,
+        r.newRec,
+        orig.changes,
+        orig.flags))
+    }
+
+    // Update events with completed diffs and call postCommit
+    completed.each |d, i| { events[i].completedDiff = d }
+    events.each |e| { h.postCommit(e) }
+
+    return FolioFuture.makeSync(CommitFolioRes(completed))
   }
 
+}
+
+**************************************************************************
+** RustFolioCommitEvent
+**************************************************************************
+
+internal class RustFolioCommitEvent : FolioCommitEvent
+{
+  new make(Diff preDiff, Dict? oldRec, Obj? cxInfo)
+  {
+    this.preDiff  = preDiff
+    this.oldRec   = oldRec
+    this.cxInfo   = cxInfo
+  }
+
+  override Diff diff() { completedDiff ?: preDiff }
+  override Dict? oldRec
+  override Obj? cxInfo
+
+  private Diff preDiff
+  Diff? completedDiff
 }
