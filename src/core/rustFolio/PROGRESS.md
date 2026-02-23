@@ -18,7 +18,7 @@ Reference design: `/Users/trevoradelman/Documents/ClineProjects/haxall-rust-dev/
 | M0 - Scaffolding | ✅ complete | 2026-02-23 | Rust crate compiles; Fantom pod compiles; 7 types / 23 methods / 7477 verifies (all green) |
 | M1 - Basic CRUD | ✅ complete | 2026-02-23 | testBasics, testReadOpts, testTrash, testFolioFuture, testHooks, testKinds, testRemoveTags all green |
 | M2 - Filters | ✅ complete | 2026-02-23 | testFilters, PrefixTest green; full gate 9921 verifies ALL GREEN |
-| M3 - Transient | 🔲 pending | | BasicTest (transient) |
+| M3 - Transient | ✅ complete | 2026-02-23 | Transient infra was already complete in Rust; enabled supportsTransient() — gate still ALL GREEN (9906 verifies) |
 | M4 - Hooks | ✅ complete | 2026-02-23 | pre/post commit hook dispatch with cxInfo — included in M1/M2 gate |
 | M5 - History | 🔲 pending | | HisTest |
 | M6 - Display | 🔲 pending | | DisTest (disMacro / syncDis propagation) |
