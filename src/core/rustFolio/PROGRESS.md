@@ -20,7 +20,7 @@ Reference design: `/Users/trevoradelman/Documents/ClineProjects/haxall-rust-dev/
 | M2 - Filters | ✅ complete | 2026-02-23 | testFilters, PrefixTest green; full gate 9921 verifies ALL GREEN |
 | M3 - Transient | ✅ complete | 2026-02-23 | Transient infra was already complete in Rust; enabled supportsTransient() — gate still ALL GREEN (9906 verifies) |
 | M4 - Hooks | ✅ complete | 2026-02-23 | pre/post commit hook dispatch with cxInfo — included in M1/M2 gate |
-| M5 - History | 🔲 pending | | HisTest |
+| M5 - History | ✅ complete | 2026-02-23 | HisTest.testBasics + HisTest.testConfig green; full gate 10164 verifies ALL GREEN |
 | M6 - Display | 🔲 pending | | DisTest (disMacro / syncDis propagation) |
 | M7 - Full Green | 🔲 pending | | All testFolio green for rustfolio impl (no deferred checks) |
 

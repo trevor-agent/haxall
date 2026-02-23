@@ -25,8 +25,8 @@ class RustFolioTestImpl : FolioTestImpl
   ** Transient commits fully implemented in Rust (RecordCache transient layer)
   override Bool supportsTransient() { true }
 
-  ** History not yet supported — enable at M5
-  override Bool supportsHis() { false }
+  ** History fully implemented Fantom-side (RustFolioHis in-memory map)
+  override Bool supportsHis() { true }
 
   ** Id prefix rename — defer until wire protocol handles it
   override Bool supportsIdPrefixRename() { false }

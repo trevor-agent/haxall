@@ -60,6 +60,9 @@ const class RustFolio : Folio
     // Unsafe is the Fantom-idiomatic way to hold mutable state in a const class.
     connRef    = AtomicRef(Unsafe(conn))
     processRef = AtomicRef(Unsafe(proc))
+
+    // History implementation (Fantom-side in-memory, see RustFolioHis)
+    hisImpl = RustFolioHis(this)
   }
 
 //////////////////////////////////////////////////////////////////////////
@@ -74,6 +77,9 @@ const class RustFolio : Folio
 
   ** Process manager for the rust-folio subprocess
   private const AtomicRef processRef
+
+  ** History implementation (Fantom-side in-memory)
+  private const RustFolioHis hisImpl
 
   private RustFolioConn? conn() { (connRef.val as Unsafe)?.val }
   private RustFolioProcess? rustProcess() { (processRef.val as Unsafe)?.val }
@@ -121,11 +127,8 @@ const class RustFolio : Folio
     throw UnsupportedErr("RustFolio.backup: not supported in v1")
   }
 
-  ** History — implemented in M5.
-  override FolioHis his()
-  {
-    throw UnsupportedErr("RustFolio.his: not implemented until M5")
-  }
+  ** History — in-memory Fantom-side implementation (M5).
+  override FolioHis his() { hisImpl }
 
   ** File storage — not supported in v1.
   override FolioFile file()
@@ -179,7 +182,7 @@ const class RustFolio : Folio
     c := conn ?: throw ShutdownErr("$typeof.name is closed")
     dict := c.readById(id)
     if (dict == null) return null
-    return RustFolioRec(dict)
+    return RustFolioRec(augmentHisTags(dict))
   }
 
   override protected FolioFuture doReadByIds(Ref[] ids)
@@ -191,7 +194,7 @@ const class RustFolio : Folio
     dicts.each |d, i|
     {
       if (d != null)
-        recs.add(RustFolioRec(d).dict)
+        recs.add(RustFolioRec(augmentHisTags(d)).dict)
       else
       {
         recs.add(null)
@@ -199,6 +202,41 @@ const class RustFolio : Folio
       }
     }
     return FolioFuture.makeSync(ReadFolioRes(errMsg, !errMsg.isEmpty, recs))
+  }
+
+  **
+  ** Inject hisSize, hisStart, hisEnd into a record dict if the record has
+  ** history data in the in-memory his store.  These are 'never' tags that
+  ** cannot flow through a normal Diff — the folio implementation owns them.
+  ** Timestamps are converted to the record's current tz so that
+  ** verifySame(r["hisStart"]->tz, tz) passes (same TimeZone singleton).
+  **
+  private Dict augmentHisTags(Dict dict)
+  {
+    // only inject for records that have a his marker
+    if (!dict.has("his")) return dict
+
+    // get record id
+    id := dict["id"] as Ref
+    if (id == null) return dict
+
+    // get stored items
+    items := hisImpl.itemsFor(id.id)
+    if (items.isEmpty) return dict
+
+    // need a valid tz to convert timestamps
+    tz := FolioUtil.hisTz(dict, false)
+    if (tz == null) return dict
+
+    // inject the three computed tags
+    first := items.first.ts.toTimeZone(tz)
+    last  := items.last.ts.toTimeZone(tz)
+    map   := Str:Obj[:]
+    dict.each |v, n| { map[n] = v }
+    map["hisSize"]  = Number(items.size)
+    map["hisStart"] = first
+    map["hisEnd"]   = last
+    return Etc.makeDict(map)
   }
 
   override protected FolioFuture doReadAll(Filter filter, Dict? opts)
