@@ -4,6 +4,7 @@
 //
 // History:
 //   23 Feb 2026  Hathi  Creation (M5)
+//   23 Feb 2026  Hathi  P1 - moved storage to Rust/redb, retired in-memory map
 //
 
 using concurrent
@@ -12,32 +13,55 @@ using haystack
 using folio
 
 **
-** RustFolioHis implements FolioHis entirely on the Fantom side using an
-** in-memory map, matching hxFolio's HisMgr design.
+** RustFolioHis implements FolioHis by delegating to the Rust process for
+** persistent storage (redb HISTORY + HISTORY_META tables).
 **
-** Design notes:
-**   - History items are stored as HisItem[] per record id (full id string).
-**   - Tz and unit are applied on-the-fly during reads (not baked into stored items).
-**     This means tz/unit config changes on the record are reflected immediately
-**     in subsequent reads without needing to re-write history data.
-**   - hisSize, hisStart, hisEnd tags are injected into the record dict by
-**     RustFolio.augmentHisTags() at read time (they are 'never' tags that
-**     cannot be set via a normal Diff).
-**   - Thread safety: AtomicRef<Unsafe<Str:HisItem[]>> — all operations are
-**     lightweight and the Fantom-side folio actor provides logical serialization.
+** Design:
+**   - FolioUtil.hisWriteCheck is still called Fantom-side for full validation
+**     and normalization (sort, dedup, tz, kind, unit).  The cleaned item list
+**     is then forwarded to Rust via RustFolioConn.hisWrite().
+**   - Tz and unit are applied on-the-fly during reads (Fantom side) so that
+**     config changes on the record take effect immediately without rewriting
+**     stored data.  Rust returns raw UTC-ticks + val bytes; Fantom applies
+**     applyConfig() before yielding to the caller.
+**   - Span boundary semantics (1 item before span.start, up to 2 after
+**     span.end) are handled Rust-side for efficient log-n seeks.
+**   - augmentHisTags (hisSize/hisStart/hisEnd) is served from a lightweight
+**     Fantom-side stats cache (RustHisStat per point) that is updated after
+**     every hisWrite and lazily populated from Rust on first access.
 **
 const class RustFolioHis : FolioHis
 {
   new make(RustFolio folio) { this.folio = folio }
 
   private const RustFolio folio
-  private const AtomicRef hisRef := AtomicRef(Unsafe(Str:HisItem[][:]))
 
-  ** Return items stored for the given (absolute) record id string.
-  HisItem[] itemsFor(Str id) { data[id] ?: HisItem#.emptyList }
+  ** Lightweight stats cache: absolute id string → RustHisStat.
+  ** Updated after every hisWrite; lazily populated via hisStat RPC on
+  ** first augmentHisTags access for a point that survived a restart.
+  private const AtomicRef statRef := AtomicRef(Unsafe(Str:RustHisStat[:]))
 
-  private Str:HisItem[] data() { ((Unsafe)hisRef.val).val }
-  private Void setData(Str:HisItem[] d) { hisRef.val = Unsafe(d) }
+  private Str:RustHisStat statCache() { ((Unsafe)statRef.val).val }
+  private Void setStatCache(Str:RustHisStat c) { statRef.val = Unsafe(c) }
+
+  **
+  ** Return cached stats for the given point id.
+  ** On cache miss (e.g. after restart), performs a lazy HIS_STAT RPC.
+  ** Returns null if the point has no stored history.
+  **
+  RustHisStat? statFor(Str id)
+  {
+    cached := statCache[id]
+    if (cached != null) return cached.size == 0 ? null : cached
+
+    // Cache miss — ask Rust (lazy load after restart)
+    c := folio.connForHis
+    if (c == null) return null
+    stat := c.hisStat(Ref(id))
+    // Cache result (even size==0 so we don't re-query)
+    setStatCache(statCache.dup.set(id, stat))
+    return stat.size == 0 ? null : stat
+  }
 
 //////////////////////////////////////////////////////////////////////////
 // Read
@@ -47,46 +71,21 @@ const class RustFolioHis : FolioHis
   {
     if (opts == null) opts = Etc.dict0
 
-    // resolve current record and validate his config
+    // Resolve record and validate his config
     rec := folio.readById(id, false)
     if (rec == null) throw HisConfigErr(Etc.emptyDict, "Unknown rec: $id.toCode")
     validateRead(rec)
 
-    // resolve config: tz, kind, unit
+    // Resolve config: tz, unit
     tz   := FolioUtil.hisTz(rec)
-    kind := FolioUtil.hisKind(rec)
     unit := FolioUtil.hisUnit(rec)
 
-    // get stored items and yield with config applied
-    items := itemsFor(id.id)
+    // Read from Rust (span semantics applied Rust-side)
+    c := folio.connForHis ?: throw ShutdownErr("RustFolio is closed")
+    items := c.hisRead(id, span)
 
-    if (span == null)
-    {
-      items.each |item| { f(applyConfig(item, tz, unit)) }
-    }
-    else
-    {
-      // SkySpark semantics: include 1 item before span.start and 2 items after span.end
-      HisItem? prev := null
-      Int after := 0
-      items.each |item|
-      {
-        normalized := applyConfig(item, tz, unit)
-        if (normalized.ts < span.start)
-        {
-          prev = normalized
-        }
-        else if (normalized.ts >= span.end)
-        {
-          if (after < 2) { f(normalized); after++ }
-        }
-        else
-        {
-          if (prev != null) { f(prev); prev = null }
-          f(normalized)
-        }
-      }
-    }
+    // Apply tz/unit and yield
+    items.each |item| { f(applyConfig(item, tz, unit)) }
   }
 
 //////////////////////////////////////////////////////////////////////////
@@ -97,34 +96,31 @@ const class RustFolioHis : FolioHis
   {
     if (opts == null) opts = Etc.dict0
 
-    // resolve current record and validate his config
+    // Resolve record and validate his config
     rec := folio.readById(id, false)
     if (rec == null) throw HisConfigErr(Etc.emptyDict, "Unknown rec: $id.toCode")
 
-    // empty write short-circuit
+    // Empty write short-circuit
     if (items.isEmpty) return FolioFuture.makeSync(HisWriteFolioRes.empty)
 
-    // force unitSet: items written to a record with a unit always get the unit
+    // Force unitSet: items written to a record with a unit always get the unit
     opts = Etc.dictSet(opts, "unitSet", Marker.val)
 
-    // validate config and normalize items (sort, tz/kind/unit check, ts precision)
-    // FolioUtil.hisWriteCheck does: point+his check, aux+trash check, tz check,
-    // kind check, unit check, timestamp normalization, dedup
+    // Validate, sort, dedup, normalize (Fantom-side — no change from M5)
     normalized := FolioUtil.hisWriteCheck(rec, items, opts)
 
-    // merge with existing stored items (sorted merge with overwrite/remove semantics)
-    cur    := itemsFor(id.id)
-    merged := FolioUtil.hisWriteMerge(cur, normalized)
+    // Persist to Rust
+    c := folio.connForHis ?: throw ShutdownErr("RustFolio is closed")
+    stat := c.hisWrite(id, normalized)
 
-    // update in-memory store
-    newData := data.dup.set(id.id, merged)
-    setData(newData)
+    // Update stats cache
+    setStatCache(statCache.dup.set(id.id, stat))
 
-    // build result dict: count + span covering the written items
+    // Build result dict
     span   := Span.makeAbs(normalized.first.ts, normalized.last.ts)
     result := Etc.makeDict(["count": Number(normalized.size), "span": span])
 
-    // dispatch postHisWrite hook with cxInfo from current thread context
+    // Dispatch postHisWrite hook
     cxInfo := FolioContext.curFolio(false)?.commitInfo
     folio.hooks.postHisWrite(RustFolioHisEvent(rec, result, cxInfo))
 
@@ -135,10 +131,6 @@ const class RustFolioHis : FolioHis
 // Helpers
 //////////////////////////////////////////////////////////////////////////
 
-  **
-  ** Validate that a record is a readable his point.
-  ** Mirrors hxFolio HisMgr.read checks.
-  **
   private static Void validateRead(Dict rec)
   {
     if (rec.missing("point") || rec.missing("his"))
@@ -150,17 +142,15 @@ const class RustFolioHis : FolioHis
   }
 
   **
-  ** Apply the record's current tz and unit to a stored item.
-  ** This is done on-the-fly so that tz/unit config changes take
-  ** effect immediately on subsequent reads.
+  ** Apply the record's current tz and unit to a raw item returned by Rust.
+  ** Rust stores ticks + val without tz/unit; we apply them here so that
+  ** config changes on the record take effect immediately.
   **
   private static HisItem applyConfig(HisItem item, TimeZone tz, Unit? unit)
   {
     ts  := item.ts.toTimeZone(tz)
     val := item.val
 
-    // Apply unit to unitless Number values when the record has a unit.
-    // If the item already has a unit it was stored with unitSet and is correct.
     if (val is Number && unit != null)
     {
       num := (Number)val

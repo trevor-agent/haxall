@@ -47,6 +47,9 @@ class RustFolioConn
   static const Int opCurVer     := 0x0030
   static const Int opFlushMode  := 0x0031
   static const Int opFlush      := 0x0032
+  static const Int opHisRead    := 0x0040
+  static const Int opHisWrite   := 0x0041
+  static const Int opHisStat    := 0x0042
 
   // Error wire codes (must match Rust error.rs)
   private static const Int errCodeUnknownRec        := 0x0001
@@ -234,6 +237,100 @@ class RustFolioConn
   }
 
 //////////////////////////////////////////////////////////////////////////
+// History
+//////////////////////////////////////////////////////////////////////////
+
+  **
+  ** HisWrite — persist a batch of normalized HisItems for a point.
+  **
+  ** Request:  [Ref id][u32 count]{[i64 ticks][val_bytes]}*[Dict opts]
+  ** Response: [u64 size][i64 first_ticks][i64 last_ticks]
+  **
+  ** Items must already be sorted and validated (via FolioUtil.hisWriteCheck).
+  ** Returns a RustHisStat describing the FULL point history after the write.
+  **
+  RustHisStat hisWrite(Ref id, HisItem[] items)
+  {
+    payload := Buf()
+    out     := payload.out
+    RustFolioSerializer.writeRef(out, id)
+    out.writeI4(items.size)
+    items.each |item|
+    {
+      out.writeI8(item.ts.ticks)
+      RustFolioSerializer.writeVal(out, item.val)
+    }
+    RustFolioSerializer.writeDict(out, Etc.emptyDict)  // opts
+    sendRequest(opHisWrite, payload)
+    resp := readResponse(opHisWrite)
+    in   := resp.in
+    size       := in.readS8
+    firstTicks := in.readS8
+    lastTicks  := in.readS8
+    return RustHisStat(size, firstTicks, lastTicks)
+  }
+
+  **
+  ** HisRead — read history items from the Rust process.
+  **
+  ** Request:  [Ref id][u8 mode: 0=all 1=span][i64 start?][i64 end?][Dict opts]
+  ** Response: [u32 count]{[i64 ticks][val_bytes]}*
+  **
+  ** When span is non-null, Rust applies SkySpark boundary semantics:
+  **   1 item before span.start, items in [start,end), up to 2 items after span.end.
+  ** Returns raw HisItems with UTC timestamps (no tz/unit applied).
+  **
+  HisItem[] hisRead(Ref id, Span? span)
+  {
+    payload := Buf()
+    out     := payload.out
+    RustFolioSerializer.writeRef(out, id)
+    if (span == null)
+    {
+      out.write(0x00)                     // mode = all
+    }
+    else
+    {
+      out.write(0x01)                     // mode = span
+      out.writeI8(span.start.ticks)
+      out.writeI8(span.end.ticks)
+    }
+    RustFolioSerializer.writeDict(out, Etc.emptyDict)  // opts
+    sendRequest(opHisRead, payload)
+    resp  := readResponse(opHisRead)
+    in    := resp.in
+    count := in.readU4
+    items := HisItem[,]
+    utc   := TimeZone.utc
+    count.times
+    {
+      ticks := in.readS8
+      val   := RustFolioSerializer.readVal(in)
+      items.add(HisItem(DateTime.makeTicks(ticks, utc), val))
+    }
+    return items
+  }
+
+  **
+  ** HisStat — return lightweight point history stats (size, first, last).
+  **
+  ** Request:  [Ref id]
+  ** Response: [u64 size][i64 first_ticks][i64 last_ticks]
+  **
+  RustHisStat hisStat(Ref id)
+  {
+    payload := Buf()
+    RustFolioSerializer.writeRef(payload.out, id)
+    sendRequest(opHisStat, payload)
+    resp       := readResponse(opHisStat)
+    in         := resp.in
+    size       := in.readS8
+    firstTicks := in.readS8
+    lastTicks  := in.readS8
+    return RustHisStat(size, firstTicks, lastTicks)
+  }
+
+//////////////////////////////////////////////////////////////////////////
 // Framing
 //////////////////////////////////////////////////////////////////////////
 
@@ -307,6 +404,33 @@ class RustFolioConn
     }
   }
 
+}
+
+**************************************************************************
+** RustHisStat
+**************************************************************************
+
+**
+** Lightweight per-point history statistics returned by HIS_WRITE / HIS_STAT.
+** size == 0 means no history exists for the point.
+**
+const class RustHisStat
+{
+  new make(Int size, Int firstTicks, Int lastTicks)
+  {
+    this.size       = size
+    this.firstTicks = firstTicks
+    this.lastTicks  = lastTicks
+  }
+
+  ** Number of stored items (0 = no history).
+  const Int size
+
+  ** Fantom DateTime.ticks of the earliest item (only valid when size > 0).
+  const Int firstTicks
+
+  ** Fantom DateTime.ticks of the latest item (only valid when size > 0).
+  const Int lastTicks
 }
 
 **************************************************************************

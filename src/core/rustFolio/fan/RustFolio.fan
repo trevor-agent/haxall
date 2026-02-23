@@ -92,6 +92,9 @@ const class RustFolio : Folio
   private RustFolioConn? conn() { (connRef.val as Unsafe)?.val }
   private RustFolioProcess? rustProcess() { (processRef.val as Unsafe)?.val }
 
+  ** Internal accessor for RustFolioHis to reach the connection.
+  internal RustFolioConn? connForHis() { conn }
+
 //////////////////////////////////////////////////////////////////////////
 // Storage Metadata
 //////////////////////////////////////////////////////////////////////////
@@ -235,35 +238,32 @@ const class RustFolio : Folio
   }
 
   **
-  ** Inject hisSize, hisStart, hisEnd into a record dict if the record has
-  ** history data in the in-memory his store.  These are 'never' tags that
-  ** cannot flow through a normal Diff — the folio implementation owns them.
-  ** Timestamps are converted to the record's current tz so that
-  ** verifySame(r["hisStart"]->tz, tz) passes (same TimeZone singleton).
+  ** Inject hisSize, hisStart, hisEnd into a record dict using the
+  ** Rust-backed stats cache (P1).  These are 'never' tags that cannot
+  ** flow through a normal Diff — the folio implementation owns them.
+  ** On cache miss a lazy HIS_STAT RPC is issued; subsequent reads use
+  ** the cached value.  Timestamps are converted to the record's tz so
+  ** that verifySame(r["hisStart"]->tz, tz) passes.
   **
   private Dict augmentHisTags(Dict dict)
   {
-    // only inject for records that have a his marker
     if (!dict.has("his")) return dict
 
-    // get record id
     id := dict["id"] as Ref
     if (id == null) return dict
 
-    // get stored items
-    items := hisImpl.itemsFor(id.id)
-    if (items.isEmpty) return dict
+    // Fetch from stat cache (O(1)) or lazy-load from Rust
+    stat := hisImpl.statFor(id.id)
+    if (stat == null) return dict
 
-    // need a valid tz to convert timestamps
     tz := FolioUtil.hisTz(dict, false)
     if (tz == null) return dict
 
-    // inject the three computed tags
-    first := items.first.ts.toTimeZone(tz)
-    last  := items.last.ts.toTimeZone(tz)
+    first := DateTime.makeTicks(stat.firstTicks, TimeZone.utc).toTimeZone(tz)
+    last  := DateTime.makeTicks(stat.lastTicks,  TimeZone.utc).toTimeZone(tz)
     map   := Str:Obj[:]
     dict.each |v, n| { map[n] = v }
-    map["hisSize"]  = Number(items.size)
+    map["hisSize"]  = Number(stat.size)
     map["hisStart"] = first
     map["hisEnd"]   = last
     return Etc.makeDict(map)

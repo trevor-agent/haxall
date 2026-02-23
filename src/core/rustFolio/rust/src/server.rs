@@ -151,6 +151,9 @@ impl Server {
             opcode::READ_ALL     => self.handle_read_all(payload, &mut pos),
             opcode::READ_COUNT   => self.handle_read_count(payload, &mut pos),
             opcode::COMMIT_ALL   => self.handle_commit_all(payload, &mut pos),
+            opcode::HIS_READ     => self.handle_his_read(payload, &mut pos),
+            opcode::HIS_WRITE    => self.handle_his_write(payload, &mut pos),
+            opcode::HIS_STAT     => self.handle_his_stat(payload, &mut pos),
             _ => Err(FolioError::Protocol(format!("Unknown opcode: {:#06x}", op))),
         }
     }
@@ -284,6 +287,89 @@ impl Server {
 
         let mut buf = Vec::new();
         protocol::write_u64(&mut buf, count);
+        Ok(buf)
+    }
+
+    // ── History handlers ─────────────────────────────────────────────────────
+
+    /// HIS_WRITE — persist a batch of history items for one point.
+    ///
+    /// Request payload:
+    ///   [Ref id] [u32 count] { [i64 ticks] [val_bytes...] }* [Dict opts]
+    ///
+    /// Response payload:
+    ///   [u64 size] [i64 first_ticks] [i64 last_ticks]
+    fn handle_his_write(&mut self, data: &[u8], pos: &mut usize) -> Result<Vec<u8>> {
+        if self.closed { return Err(FolioError::Shutdown); }
+
+        let id_ref = read_href(data, pos)?;
+        let count  = protocol::read_u32(data, pos)? as usize;
+
+        let mut items: Vec<(i64, Vec<u8>)> = Vec::with_capacity(count);
+        for _ in 0..count {
+            let ticks = protocol::read_i64(data, pos)?;
+            // Read a single val: consume the remainder of this item.
+            // write_val serialises a type-byte + optional payload; read_val
+            // advances *pos past the complete value.
+            let val_start = *pos;
+            read_val(data, pos)?;           // advances pos; result discarded (we store raw bytes)
+            let val_bytes = data[val_start..*pos].to_vec();
+            items.push((ticks, val_bytes));
+        }
+        // opts dict — consumed but not used in P1
+        let _opts = read_dict(data, pos)?;
+
+        let stat = self.storage.his_write(&id_ref.id, &items)?;
+
+        let mut buf = Vec::with_capacity(24);
+        protocol::write_u64(&mut buf, stat.size);
+        protocol::write_i64(&mut buf, stat.first_ticks);
+        protocol::write_i64(&mut buf, stat.last_ticks);
+        Ok(buf)
+    }
+
+    /// HIS_READ — read history items for one point, with optional span.
+    ///
+    /// Request payload:
+    ///   [Ref id] [u8 mode: 0=all, 1=span] [i64 start_ticks?] [i64 end_ticks?] [Dict opts]
+    ///
+    /// Response payload:
+    ///   [u32 count] { [i64 ticks] [val_bytes...] }*
+    fn handle_his_read(&self, data: &[u8], pos: &mut usize) -> Result<Vec<u8>> {
+        if self.closed { return Err(FolioError::Shutdown); }
+
+        let id_ref    = read_href(data, pos)?;
+        let mode      = protocol::read_u8(data, pos)?;
+        let span_mode = mode == 0x01;
+        let start_ticks = if span_mode { protocol::read_i64(data, pos)? } else { 0 };
+        let end_ticks   = if span_mode { protocol::read_i64(data, pos)? } else { 0 };
+        let _opts = read_dict(data, pos)?;
+
+        let raw_items = self.storage.his_read(&id_ref.id, span_mode, start_ticks, end_ticks)?;
+
+        let mut buf = Vec::new();
+        protocol::write_u32(&mut buf, raw_items.len() as u32);
+        for (ticks, val_bytes) in &raw_items {
+            protocol::write_i64(&mut buf, *ticks);
+            buf.extend_from_slice(val_bytes);
+        }
+        Ok(buf)
+    }
+
+    /// HIS_STAT — return lightweight stats (size, first_ticks, last_ticks).
+    ///
+    /// Request payload:  [Ref id]
+    /// Response payload: [u64 size] [i64 first_ticks] [i64 last_ticks]
+    fn handle_his_stat(&self, data: &[u8], pos: &mut usize) -> Result<Vec<u8>> {
+        if self.closed { return Err(FolioError::Shutdown); }
+
+        let id_ref = read_href(data, pos)?;
+        let stat   = self.storage.his_stat(&id_ref.id)?;
+
+        let mut buf = Vec::with_capacity(24);
+        protocol::write_u64(&mut buf, stat.size);
+        protocol::write_i64(&mut buf, stat.first_ticks);
+        protocol::write_i64(&mut buf, stat.last_ticks);
         Ok(buf)
     }
 

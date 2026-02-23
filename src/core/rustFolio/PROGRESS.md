@@ -77,6 +77,28 @@ the main haxall src/core/build.fan). This implementation adds `rustFolio/build.f
 **Impact:** None on test results. Enables `rustFolio.pod` to be rebuilt automatically with
 the rest of haxall.
 
+## Production Phases (Post-Gate)
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| P1 - History persistence | 🔄 in progress | Move history write/read to Rust (redb HISTORY table). Retire in-memory RustFolioHis. |
+| P2 - Runtime integration | 🔲 pending | Service index registration. hx init/run support. Validate under live connectors, Axon eval, UI. |
+| P3 - Backup | 🔲 pending | FolioBackup impl — consistent redb snapshot (redb has native snapshot API). |
+| P4 - File storage | 🔲 pending | FolioFile — blob table in Rust or Fantom-side disk delegation. |
+| P5 - Hardening | 🔲 pending | Incremental dis updates (O(n)/commit → dirty-set tracking). Reconnect-on-failure. Prefix rename. Benchmarking vs hxFolio. |
+
+### P1 Design — History Persistence
+
+**Problem:** `RustFolioHis` stores all time-series data in a Fantom-side `AtomicRef` map.
+History is lost on restart. The redb `HISTORY` table is scaffolded but unused.
+
+**Approach:**
+- Rust: HISTORY table key = `[u16 id_len][id bytes][8 bytes encoded_ticks]` (biased i64 for correct lexicographic ordering). Value = serialized Val bytes (write_val format). HISTORY_META table: per-point stat row `[u64 size][i64 first_ticks][i64 last_ticks]`.
+- Rust server: implement `HIS_WRITE (0x0041)` and `HIS_READ (0x0040)` handlers. Add `HIS_STAT (0x0042)` for lightweight augmentHisTags queries.
+- Fantom: `RustFolioConn` gets `hisWrite`, `hisRead`, `hisStat` methods. `RustFolioHis` becomes a thin Rust RPC wrapper. Stats cache (`Str:RustHisStat AtomicRef`) replaces in-memory items; used by `augmentHisTags`.
+- Span semantics (1 item before span.start, up to 2 after span.end) handled Rust-side for efficiency.
+- `FolioUtil.hisWriteCheck` still called Fantom-side for validation/normalization before sending to Rust.
+
 ## Build Notes
 
 ### Running the Rust crate build
