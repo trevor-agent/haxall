@@ -159,15 +159,8 @@ fn build_add_dict(
     new_mod: &chrono::DateTime<Tz>,
     config: &Config,
 ) -> Dict {
-    let abs_id = if let Some(prefix) = &config.id_prefix {
-        if id_str.contains(':') {
-            id_str.to_string() // already absolute
-        } else {
-            format!("{}{}", prefix, id_str)
-        }
-    } else {
-        id_str.to_string()
-    };
+    // Use normalize_id: handles both prefix application and the "null" guard.
+    let abs_id = normalize_id(id_str, config);
 
     // Build from changes, skipping Val::Remove entries (they're no-ops on add)
     let mut dict = Dict::default();

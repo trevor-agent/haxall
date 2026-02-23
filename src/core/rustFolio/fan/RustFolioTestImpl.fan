@@ -22,8 +22,8 @@ class RustFolioTestImpl : FolioTestImpl
 
   override Folio open(FolioConfig c) { RustFolio.open(c) }
 
-  ** Transient commits not yet supported — enable at M3
-  override Bool supportsTransient() { false }
+  ** Transient commits fully implemented in Rust (RecordCache transient layer)
+  override Bool supportsTransient() { true }
 
   ** History not yet supported — enable at M5
   override Bool supportsHis() { false }

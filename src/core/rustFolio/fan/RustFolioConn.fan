@@ -307,13 +307,6 @@ class RustFolioConn
     }
   }
 
-  private static Buf readBytesExact(InStream in, Int n, Str ctx)
-  {
-    buf := Buf(n)
-    in.readBufFully(buf, n)
-    return buf.seek(0)
-  }
-
 }
 
 **************************************************************************

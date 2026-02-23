@@ -14,11 +14,13 @@ using folio
 **
 ** RustFolioProcess manages the lifecycle of the rust-folio subprocess.
 **
-** Ready signaling: Fantom's Process API cannot read process stdout
-** (the 'out' field is an OutStream that receives stdout output, not an
-** InStream to read from). Instead, rust-folio writes its port number to
-** {dir}/.rust-folio.port after binding. This class polls for that file
-** with a configurable timeout. See PROGRESS.md DEV-003 for full rationale.
+** Ready signaling: Fantom's Process.out is an OutStream sink — it receives
+** bytes written to the subprocess stdout on a background JVM thread, so
+** there is no safe way to synchronously poll it from the folio actor thread
+** without introducing locks or races. Instead, rust-folio writes its TCP
+** port number to {dir}/.rust-folio.port after binding, and this class polls
+** for that file. The file write is atomic from the OS perspective and safe
+** to poll from any thread. See PROGRESS.md DEV-003 for full rationale.
 **
 class RustFolioProcess
 {
