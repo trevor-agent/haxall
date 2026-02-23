@@ -1,0 +1,21 @@
+[package]
+name = "rust-folio"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "rust-folio"
+path = "src/main.rs"
+
+[dependencies]
+redb = "2"
+chrono = "0.4"
+chrono-tz = "0.10"
+ordered-float = "4"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -30,6 +30,7 @@ class Build : BuildGroup
       `hx/build.fan`,
       `hxStore/build.fan`,
       `hxFolio/build.fan`,
+      `rustFolio/build.fan`,
       `hxm/build.fan`,
       `hxd/build.fan`,
     ]
