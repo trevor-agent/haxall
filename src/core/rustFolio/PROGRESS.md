@@ -21,8 +21,8 @@ Reference design: `/Users/trevoradelman/Documents/ClineProjects/haxall-rust-dev/
 | M3 - Transient | ✅ complete | 2026-02-23 | Transient infra was already complete in Rust; enabled supportsTransient() — gate still ALL GREEN (9906 verifies) |
 | M4 - Hooks | ✅ complete | 2026-02-23 | pre/post commit hook dispatch with cxInfo — included in M1/M2 gate |
 | M5 - History | ✅ complete | 2026-02-23 | HisTest.testBasics + HisTest.testConfig green; full gate 10164 verifies ALL GREEN |
-| M6 - Display | 🔲 pending | | DisTest (disMacro / syncDis propagation) |
-| M7 - Full Green | 🔲 pending | | All testFolio green for rustfolio impl (no deferred checks) |
+| M6 - Display | ✅ complete | 2026-02-23 | DisTest green; full gate 10195 verifies ALL GREEN |
+| M7 - Full Green | ✅ complete | 2026-02-23 | No deferred no-ops remain in RustFolioTestImpl; gate fully clean |
 
 ## Deviations from Reference Design
 
@@ -59,6 +59,15 @@ that have no dis (e.g. `Ref("a")` under prefix `u:`) have their dis populated by
 the referenced record in the cache — matching FolioFlatFile's behaviour of setting
 `newRec.id.disVal = newRec.dis` and preserving dis through `toRel`/`toAbs` round-trips.
 `Ref.nullRef` (id = `"null"`) is explicitly exempt from prefix normalization.
+
+### DEV-007 — M6 dis propagation: full-sweep vs. shared Ref objects
+**Reference:** hxFolio uses shared in-memory `Rec` objects. `DisMgr.update(rec)` sets `rec.id.disVal` immediately and kicks off `updateAll` asynchronously. Because all dicts sharing a given record's `Ref` use the same object, the update is instantly visible everywhere.
+
+**This implementation:** Rust deserializes a fresh `Dict` per `readById` call — there are no shared Refs. `RustFolioDisMgr` maintains a `Str:Str` id→dis cache (an `AtomicRef<Unsafe<Map>>`).
+- After every commit, `disMgr.updateAll(conn.readAll(...))` re-reads all records and recomputes the full dis cache (same total work as hxFolio's async `updateAll`).
+- After every `folio.sync(null, "dis")` call, the same sweep runs.
+- On open/reopen, an initial sweep runs so that persisted disMacro dis values are available immediately.
+- `enrichRefs(dict)` is called in both `doReadRecById` and `doReadByIds` to inject cached `disVal` into all Ref-typed tags in each returned dict, making `Dict.dis` (via `Etc.dictToDis` + `Macro.refToDis`) and `Ref.dis` correct for disMacro records.
 
 ### DEV-002 — Added to haxall/src/core/build.fan
 **Reference:** The reference project lives as a separate parent workspace (not integrated into

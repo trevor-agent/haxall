@@ -63,6 +63,11 @@ const class RustFolio : Folio
 
     // History implementation (Fantom-side in-memory, see RustFolioHis)
     hisImpl = RustFolioHis(this)
+
+    // Display string manager — compute initial dis cache on open so that
+    // post-reopen verifyDictDis checks work without an explicit syncDis call.
+    disMgr = RustFolioDisMgr()
+    disMgr.updateAll(conn.readAll(Filter.has("id"), null))
   }
 
 //////////////////////////////////////////////////////////////////////////
@@ -80,6 +85,9 @@ const class RustFolio : Folio
 
   ** History implementation (Fantom-side in-memory)
   private const RustFolioHis hisImpl
+
+  ** Display string manager (Fantom-side cache, M6)
+  private const RustFolioDisMgr disMgr
 
   private RustFolioConn? conn() { (connRef.val as Unsafe)?.val }
   private RustFolioProcess? rustProcess() { (processRef.val as Unsafe)?.val }
@@ -115,6 +123,22 @@ const class RustFolio : Folio
   {
     c := conn ?: throw ShutdownErr("$typeof.name is closed")
     c.sendFlush
+  }
+
+  **
+  ** Sync override.  When called with mgr == "dis" (from DisTest.syncDis and
+  ** production code), re-read all records from Rust and recompute the
+  ** disMacro dis cache.  This is the RustFolio equivalent of hxFolio's
+  ** DisMgr.updateAll() triggered via HxFolio.sync(null, "dis").
+  **
+  override This sync(Duration? timeout := null, Str? mgr := null)
+  {
+    if (mgr == "dis")
+    {
+      c := conn
+      if (c != null) disMgr.updateAll(c.readAll(Filter.has("id"), null))
+    }
+    return this
   }
 
 //////////////////////////////////////////////////////////////////////////
@@ -182,7 +206,9 @@ const class RustFolio : Folio
     c := conn ?: throw ShutdownErr("$typeof.name is closed")
     dict := c.readById(id)
     if (dict == null) return null
-    return RustFolioRec(augmentHisTags(dict))
+    dict = augmentHisTags(dict)
+    disMgr.enrichRefs(dict)
+    return RustFolioRec(dict)
   }
 
   override protected FolioFuture doReadByIds(Ref[] ids)
@@ -194,7 +220,11 @@ const class RustFolio : Folio
     dicts.each |d, i|
     {
       if (d != null)
-        recs.add(RustFolioRec(augmentHisTags(d)).dict)
+      {
+        d = augmentHisTags(d)
+        disMgr.enrichRefs(d)
+        recs.add(RustFolioRec(d).dict)
+      }
       else
       {
         recs.add(null)
@@ -298,6 +328,12 @@ const class RustFolio : Folio
     // Update events with completed diffs and call postCommit
     completed.each |d, i| { events[i].completedDiff = d }
     events.each |e| { h.postCommit(e) }
+
+    // Refresh the dis cache after every commit so that subsequent readById
+    // calls return Refs with up-to-date disVal.  This mirrors hxFolio's
+    // DisMgr.update(rec) + updateAll() pattern: every commit that may change
+    // a record's dis immediately propagates to all disMacro dependents.
+    disMgr.updateAll(c.readAll(Filter.has("id"), null))
 
     return FolioFuture.makeSync(CommitFolioRes(completed))
   }

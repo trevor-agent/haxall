@@ -48,10 +48,10 @@ class RustFolioTestImpl : FolioTestImpl
   }
 
   **
-  ** M6 (disMacro / syncDis propagation) is not yet implemented.
-  ** Override as no-ops to allow DisTest to run the underlying
-  ** commit/read operations without failing on dis verification.
+  ** verifyDictDis and verifyIdDis use the default FolioTestImpl behaviour:
+  **   verifyEq(r.dis, expect) + verifyEq(r.id.dis, expect)
+  ** RustFolioDisMgr.enrichRefs() sets Ref.disVal on all Refs returned by
+  ** readById, so both Dict.dis (via Etc.dictToDis + Macro.refToDis) and
+  ** Ref.dis resolve correctly for disMacro records.
   **
-  override Void verifyDictDis(Dict r, Str expect) {}
-  override Void verifyIdDis(Ref id, Str expect)   {}
 }
