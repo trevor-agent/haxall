@@ -192,10 +192,3 @@ fn write_grid(buf: &mut Vec<u8>, g: &Grid) {
     }
 }
 
-/// Serialize an HRef (the optional found sentinel).
-pub fn write_opt_href(buf: &mut Vec<u8>, r: Option<&HRef>) {
-    match r {
-        None    => write_u8(buf, 0x00),
-        Some(r) => { write_u8(buf, 0x01); write_href(buf, r); }
-    }
-}

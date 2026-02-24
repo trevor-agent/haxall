@@ -61,29 +61,10 @@ where
     }
 }
 
-/// Strip ANSI CSI escape sequences (e.g. ESC[3m, ESC[0m) from a string.
-/// Defensive utility: tracing-subscriber's DefaultFields formatter injects ANSI
-/// styling even when a custom FormatEvent handles the output — this removes it.
-fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' {
-            // Skip CSI sequence: ESC [ ... <letter>
-            while let Some(&c) = chars.peek() {
-                chars.next();
-                if c.is_ascii_alphabetic() { break; }
-            }
-        } else {
-            out.push(ch);
-        }
-    }
-    out
-}
-
 /// Field visitor that builds a plain `message key=value ...` string.
 /// The special "message" field is written first without a key prefix.
 /// All other fields follow as `key=value` pairs separated by spaces.
+/// ANSI injection is suppressed at the subscriber level via `.with_ansi(false)`.
 struct PlainVisitor {
     output:  String,
     has_msg: bool,
@@ -95,8 +76,6 @@ impl PlainVisitor {
     }
 
     fn append_field(&mut self, name: &str, value: String) {
-        // Strip ANSI codes that tracing-subscriber may embed via DefaultFields styling.
-        let value = strip_ansi(&value);
         if name == "message" {
             self.has_msg = true;
             self.output.push_str(&value);

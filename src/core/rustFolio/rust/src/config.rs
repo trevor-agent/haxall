@@ -1,8 +1,8 @@
 // config.rs — Server configuration from CLI arguments.
 //
-// Accepts: --dir <path>  [--flush-mode <mode>]  [--id-prefix <prefix>]  [--name <name>]
-// --dir is required; all others are optional with sane defaults.
-// No external arg-parsing crate: four flags don't warrant the dep tree.
+// Accepts: --dir <path>  [--flush-mode <mode>]  [--id-prefix <prefix>]
+// --dir is required; others are optional with sane defaults.
+// No external arg-parsing crate: three flags don't warrant the dep tree.
 
 use std::path::PathBuf;
 
@@ -16,9 +16,6 @@ pub struct Config {
 
     /// Optional ref prefix for absolute refs (e.g. "p:proj:r:").
     pub id_prefix: Option<String>,
-
-    /// Database name — defaults to directory name.
-    pub name: Option<String>,
 }
 
 impl Config {
@@ -27,7 +24,6 @@ impl Config {
         let mut dir:        Option<PathBuf> = None;
         let mut flush_mode: String          = "fsync".to_string();
         let mut id_prefix:  Option<String>  = None;
-        let mut name:       Option<String>  = None;
 
         let mut args = std::env::args().skip(1);
         while let Some(key) = args.next() {
@@ -35,7 +31,6 @@ impl Config {
                 "--dir"        => dir        = args.next().map(PathBuf::from),
                 "--flush-mode" => flush_mode = args.next().unwrap_or_else(|| "fsync".to_string()),
                 "--id-prefix"  => id_prefix  = args.next(),
-                "--name"       => name       = args.next(),
                 other          => eprintln!("rust-folio: unknown argument: {}", other),
             }
         }
@@ -45,17 +40,7 @@ impl Config {
             std::process::exit(1);
         });
 
-        Config { dir, flush_mode, id_prefix, name }
-    }
-
-    pub fn db_name(&self) -> String {
-        self.name.clone().unwrap_or_else(|| {
-            self.dir
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("db")
-                .to_string()
-        })
+        Config { dir, flush_mode, id_prefix }
     }
 
     pub fn db_path(&self) -> PathBuf {

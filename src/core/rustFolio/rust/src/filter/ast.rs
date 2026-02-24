@@ -26,9 +26,6 @@ impl FilterPath {
         self.segments.len()
     }
 
-    pub fn get(&self, i: usize) -> &str {
-        &self.segments[i]
-    }
 }
 
 impl std::fmt::Display for FilterPath {
@@ -62,6 +59,6 @@ pub enum Filter {
     Or(Box<Filter>, Box<Filter>),
     /// isSpec(specName) — requires Xeto schema knowledge; treated as false
     IsSpec(String),
-    /// isSymbol(^sym) — treated as false
-    IsSymbol(String),
+    /// isSymbol(^sym) — treated as false; inner symbol value is not evaluated
+    IsSymbol,
 }

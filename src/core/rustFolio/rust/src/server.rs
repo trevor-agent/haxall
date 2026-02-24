@@ -9,7 +9,6 @@
 // Single-threaded request processing matches folio's actor pattern.
 
 use std::net::{TcpListener, TcpStream};
-use std::io::Write;
 use crate::config::Config;
 use crate::error::{FolioError, Result};
 use crate::protocol::{self, msg_type, opcode};

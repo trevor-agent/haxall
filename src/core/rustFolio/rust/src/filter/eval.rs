@@ -45,7 +45,7 @@ fn match_filter(f: &Filter, rec: &Dict, cache: &RecordCache) -> bool {
         }
 
         // isSymbol: symbol-literal filters are not used by folio queries; always false.
-        Filter::IsSymbol(_) => false,
+        Filter::IsSymbol => false,
     }
 }
 

@@ -49,10 +49,6 @@ impl<'a> Parser<'a> {
         self.pos >= self.input.len()
     }
 
-    fn peek_char(&self) -> Option<char> {
-        self.input[self.pos..].trim_start().chars().next()
-    }
-
     // Skip whitespace and return current position after trim
     fn trim_pos(&self) -> usize {
         let tail = &self.input[self.pos..];
@@ -108,11 +104,11 @@ impl<'a> Parser<'a> {
             return Ok(f);
         }
 
-        // Symbol: ^sym
+        // Symbol: ^sym — consume token, always evaluates to false
         if tail.starts_with('^') {
             self.pos += 1;
-            let sym = self.read_id()?;
-            return Ok(Filter::IsSymbol(sym));
+            let _sym = self.read_id()?;
+            return Ok(Filter::IsSymbol);
         }
 
         // "not" keyword → missing

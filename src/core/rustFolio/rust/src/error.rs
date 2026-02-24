@@ -5,9 +5,6 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum FolioError {
-    #[error("Record not found: {0}")]
-    UnknownRec(String),
-
     #[error("Commit error: {0}")]
     CommitErr(String),
 
@@ -16,18 +13,6 @@ pub enum FolioError {
 
     #[error("Database is closed")]
     Shutdown,
-
-    #[error("Diff error: {0}")]
-    DiffErr(String),
-
-    #[error("Invalid tag value: {0}")]
-    InvalidTagVal(String),
-
-    #[error("History config error: {0}")]
-    HisConfig(String),
-
-    #[error("History write error: {0}")]
-    HisWrite(String),
 
     #[error("Authentication failed: bad or missing token")]
     AuthFailed,
@@ -46,16 +31,11 @@ impl FolioError {
     /// Wire protocol error code — must match Fantom client's switch statement.
     pub fn wire_code(&self) -> u16 {
         match self {
-            FolioError::UnknownRec(_)     => 0x0001,
-            FolioError::CommitErr(_)      => 0x0002,
+            FolioError::CommitErr(_)        => 0x0002,
             FolioError::ConcurrentChange(_) => 0x0003,
-            FolioError::Shutdown          => 0x0004,
-            FolioError::DiffErr(_)        => 0x0005,
-            FolioError::InvalidTagVal(_)  => 0x0006,
-            FolioError::Io(_)             => 0x0007,
-            FolioError::HisConfig(_)      => 0x0008,
-            FolioError::HisWrite(_)       => 0x0009,
-            _                             => 0x00FF,
+            FolioError::Shutdown            => 0x0004,
+            FolioError::Io(_)               => 0x0007,
+            _                               => 0x00FF,
         }
     }
 }

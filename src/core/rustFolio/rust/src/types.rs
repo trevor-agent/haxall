@@ -44,10 +44,6 @@ impl HRef {
     pub fn new(id: impl Into<String>) -> Self {
         HRef { id: id.into(), dis: None }
     }
-
-    pub fn with_dis(id: impl Into<String>, dis: impl Into<String>) -> Self {
-        HRef { id: id.into(), dis: Some(dis.into()) }
-    }
 }
 
 impl std::fmt::Display for HRef {
@@ -67,11 +63,6 @@ impl Dict {
         Dict { tags: Vec::new() }
     }
 
-    pub fn from_tags(mut tags: Vec<(String, Val)>) -> Self {
-        tags.sort_by(|a, b| a.0.cmp(&b.0));
-        Dict { tags }
-    }
-
     /// Get value by name (binary search — O(log n)).
     pub fn get(&self, name: &str) -> Option<&Val> {
         self.tags
@@ -80,21 +71,12 @@ impl Dict {
             .map(|i| &self.tags[i].1)
     }
 
-    pub fn has(&self, name: &str) -> bool {
-        self.get(name).is_some()
-    }
-
     /// Get "id" tag as HRef.
     pub fn id(&self) -> Option<&HRef> {
         match self.get("id") {
             Some(Val::Ref(r)) => Some(r),
             _ => None,
         }
-    }
-
-    /// Get id string.
-    pub fn id_str(&self) -> Option<&str> {
-        self.id().map(|r| r.id.as_str())
     }
 
     /// Get "mod" tag as DateTime.
@@ -142,14 +124,6 @@ impl Dict {
         self.merge(changes)
     }
 
-    pub fn len(&self) -> usize {
-        self.tags.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.tags.is_empty()
-    }
-
     pub fn iter(&self) -> impl Iterator<Item = (&str, &Val)> {
         self.tags.iter().map(|(k, v)| (k.as_str(), v))
     }
@@ -171,16 +145,12 @@ pub struct Grid {
     pub rows: Vec<Dict>,
 }
 
-/// Diff flags (mirror Fantom Diff.fan constants).
+/// Diff flags (mirror Fantom Diff.fan constants — only flags evaluated Rust-side).
 pub mod diff_flags {
-    pub const ADD:               u8 = 0x01;
-    pub const REMOVE:            u8 = 0x02;
-    pub const TRANSIENT:         u8 = 0x04;
-    pub const FORCE:             u8 = 0x08;
-    pub const BYPASS_RESTRICTED: u8 = 0x10;
-    pub const CUR_VAL:           u8 = 0x20;
-    pub const POINT:             u8 = 0x40;
-    pub const TREE_UPDATE:       u8 = 0x80;
+    pub const ADD:       u8 = 0x01;
+    pub const REMOVE:    u8 = 0x02;
+    pub const TRANSIENT: u8 = 0x04;
+    pub const FORCE:     u8 = 0x08;
 }
 
 /// A single diff — change to apply to a record.
@@ -197,7 +167,6 @@ impl Diff {
     pub fn is_remove(&self)    -> bool { self.flags & diff_flags::REMOVE   != 0 }
     pub fn is_transient(&self) -> bool { self.flags & diff_flags::TRANSIENT != 0 }
     pub fn is_force(&self)     -> bool { self.flags & diff_flags::FORCE    != 0 }
-    pub fn is_update(&self)    -> bool { !self.is_add() && !self.is_remove() }
 }
 
 /// Result of applying a single diff.

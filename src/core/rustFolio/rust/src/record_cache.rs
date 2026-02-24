@@ -24,9 +24,6 @@ pub struct FolioRec {
     /// Merged view (persistent + transient). Returned by reads.
     pub merged: Dict,
 
-    /// Computed display string for this record's id.
-    pub dis: String,
-
     /// Ticks of last change (persistent or transient) for watch support.
     pub ticks: u64,
 }
@@ -34,12 +31,10 @@ pub struct FolioRec {
 impl FolioRec {
     pub fn from_persistent(persistent: Dict) -> Self {
         let merged = persistent.clone();
-        let dis    = merged.id().map(|r| r.id.clone()).unwrap_or_default();
         FolioRec {
             persistent,
             transient: Dict::new(),
             merged,
-            dis,
             ticks: now_ticks(),
         }
     }

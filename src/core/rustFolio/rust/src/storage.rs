@@ -116,7 +116,6 @@ pub struct HisStat {
 
 impl HisStat {
     pub fn empty() -> Self { HisStat { size: 0, first_ticks: 0, last_ticks: 0 } }
-    pub fn is_empty(&self) -> bool { self.size == 0 }
 }
 
 // ── Storage ──────────────────────────────────────────────────────────────────

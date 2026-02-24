@@ -134,16 +134,6 @@ pub fn read_dict(data: &[u8], pos: &mut usize) -> Result<Dict> {
     Ok(Dict { tags })
 }
 
-/// Deserialize an optional Dict (0x00 = null, 0x01 = present).
-pub fn read_opt_dict(data: &[u8], pos: &mut usize) -> Result<Option<Dict>> {
-    let flag = read_u8(data, pos)?;
-    if flag == 0x00 {
-        Ok(None)
-    } else {
-        Ok(Some(read_dict(data, pos)?))
-    }
-}
-
 /// Deserialize a DateTime.
 pub fn read_datetime(data: &[u8], pos: &mut usize) -> Result<chrono::DateTime<chrono_tz::Tz>> {
     let year  = read_u16(data, pos)? as i32;

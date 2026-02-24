@@ -26,7 +26,6 @@ pub mod msg_type {
 
 /// Operation codes
 pub mod opcode {
-    pub const OPEN:       u16 = 0x0001;
     pub const CLOSE:      u16 = 0x0002;
     pub const SYNC:       u16 = 0x0003;
     pub const READ_BY_ID:  u16 = 0x0010;
@@ -260,15 +259,6 @@ pub fn read_u32(data: &[u8], pos: &mut usize) -> Result<u32> {
     }
     let v = u32::from_be_bytes([data[*pos], data[*pos+1], data[*pos+2], data[*pos+3]]);
     *pos += 4;
-    Ok(v)
-}
-
-pub fn read_u64(data: &[u8], pos: &mut usize) -> Result<u64> {
-    if *pos + 8 > data.len() {
-        return Err(FolioError::Protocol("Unexpected end of data (u64)".into()));
-    }
-    let v = u64::from_be_bytes(data[*pos..*pos+8].try_into().expect("8-byte slice guaranteed by bounds check above"));
-    *pos += 8;
     Ok(v)
 }
 

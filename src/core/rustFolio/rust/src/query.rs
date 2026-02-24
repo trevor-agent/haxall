@@ -42,48 +42,13 @@ pub fn read_all(
     cache:  &RecordCache,
 ) -> Vec<Dict> {
     let mut results: Vec<Dict> = Vec::new();
-
-    // Use tag index to compute a candidate set when the filter leading AND
-    // chain contains at least one simple Has(single_tag) term. Fall back to
-    // full scan for OR roots, multi-segment paths, and non-Has-leading filters.
-    let index_keys = extract_index_keys(filter);
-
-    if index_keys.is_empty() {
-        // Full scan (existing behavior)
-        for (_id, rec) in &cache.by_id {
-            if !opts.include_trash && rec.is_trash() { continue; }
-            if !matches(filter, &rec.merged, cache) { continue; }
-            results.push(rec.merged.clone());
-            if let Some(lim) = opts.limit {
-                if results.len() >= lim { break; }
-            }
-        }
-    } else {
-        // Intersect index sets to get candidate ids, then apply full filter.
-        if let Some(candidates) = intersect_index(&index_keys, cache) {
-            for id in &candidates {
-                if let Some(rec) = cache.by_id.get(id.as_str()) {
-                    if !opts.include_trash && rec.is_trash() { continue; }
-                    if !matches(filter, &rec.merged, cache) { continue; }
-                    results.push(rec.merged.clone());
-                    if let Some(lim) = opts.limit {
-                        if results.len() >= lim { break; }
-                    }
-                }
-            }
-        }
-        // If any index key has no entries, intersect is empty — zero results.
-    }
-
-    // Sort by dis if requested
+    for_each_candidate(filter, opts, cache, |dict| {
+        results.push(dict.clone());
+        opts.limit.map_or(true, |lim| results.len() < lim)
+    });
     if opts.sort {
-        results.sort_by(|a, b| {
-            let da = dict_dis(a);
-            let db = dict_dis(b);
-            da.cmp(&db)
-        });
+        results.sort_by(|a, b| dict_dis(a).cmp(&dict_dis(b)));
     }
-
     results
 }
 
@@ -93,37 +58,43 @@ pub fn read_count(
     opts:   &QueryOpts,
     cache:  &RecordCache,
 ) -> u64 {
-    let mut count: u64 = 0;
+    let mut count = 0u64;
+    for_each_candidate(filter, opts, cache, |_| {
+        count += 1;
+        opts.limit.map_or(true, |lim| count < lim as u64)
+    });
+    count
+}
 
+/// Core candidate loop: calls `visit(dict)` for each record that passes the filter.
+/// `visit` returns `true` to continue, `false` to stop early (limit support).
+///
+/// Uses the tag index to intersect candidate sets when the filter's leading AND
+/// chain contains simple Has(tag) terms; falls back to a full scan otherwise.
+fn for_each_candidate<F>(
+    filter: &Filter,
+    opts:   &QueryOpts,
+    cache:  &RecordCache,
+    mut visit: F,
+) where F: FnMut(&Dict) -> bool {
     let index_keys = extract_index_keys(filter);
 
     if index_keys.is_empty() {
-        for (_id, rec) in &cache.by_id {
+        for (_, rec) in &cache.by_id {
             if !opts.include_trash && rec.is_trash() { continue; }
-            if matches(filter, &rec.merged, cache) {
-                count += 1;
-                if let Some(lim) = opts.limit {
-                    if count >= lim as u64 { break; }
-                }
-            }
+            if !matches(filter, &rec.merged, cache) { continue; }
+            if !visit(&rec.merged) { return; }
         }
-    } else {
-        if let Some(candidates) = intersect_index(&index_keys, cache) {
-            for id in &candidates {
-                if let Some(rec) = cache.by_id.get(id.as_str()) {
-                    if !opts.include_trash && rec.is_trash() { continue; }
-                    if matches(filter, &rec.merged, cache) {
-                        count += 1;
-                        if let Some(lim) = opts.limit {
-                            if count >= lim as u64 { break; }
-                        }
-                    }
-                }
+    } else if let Some(candidates) = intersect_index(&index_keys, cache) {
+        for id in &candidates {
+            if let Some(rec) = cache.by_id.get(id.as_str()) {
+                if !opts.include_trash && rec.is_trash() { continue; }
+                if !matches(filter, &rec.merged, cache) { continue; }
+                if !visit(&rec.merged) { return; }
             }
         }
     }
-
-    count
+    // If any index key has no entries, intersect is empty — zero results.
 }
 
 /// Extract single-tag Has terms from the top-level AND chain of a filter.
@@ -154,8 +125,6 @@ fn collect_index_keys(filter: &Filter, out: &mut Vec<String>) {
         // Everything else (Or, Eq, Ne, comparisons, IsSpec, IsSymbol, Missing,
         // multi-segment Has) does not contribute index keys, but does not
         // invalidate keys already collected from sibling AND branches.
-        // An Or at the root simply contributes nothing, leaving keys empty
-        // and triggering a full scan — the safe conservative choice.
         _ => {}
     }
 }
@@ -165,17 +134,14 @@ fn collect_index_keys(filter: &Filter, out: &mut Vec<String>) {
 /// Returns None if any key has no entry in the index (empty intersection).
 /// Returns Some(set) with the candidate record ids.
 fn intersect_index<'a>(keys: &[String], cache: &'a RecordCache) -> Option<HashSet<String>> {
-    // Start with the smallest set to minimize intersection work
     let mut sets: Vec<&HashSet<String>> = keys.iter()
         .filter_map(|k| cache.tag_index.get(k))
         .collect();
 
     if sets.len() < keys.len() {
-        // At least one key has no index entry — intersection is empty
         return None;
     }
 
-    // Sort by set size ascending for efficient intersection
     sets.sort_by_key(|s| s.len());
 
     let mut result: HashSet<String> = sets[0].clone();
