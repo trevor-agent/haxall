@@ -303,7 +303,6 @@ already available post-read.
 
 ## Future Improvements
 
-- **Prefix rename** — atomic id rewrite across all records in redb. `PrefixTest` currently skips this case.
 - **Namespace reload hook** — `isSpec` filter evaluation uses a spec hierarchy pushed from Fantom at open/reconnect. Runtime lib changes require a restart to refresh the map. The correct fix is a `onNamespaceModified` callback contributed to `FolioHooks` upstream.
 - **Incremental his_stat** — `HIS_WRITE` currently recomputes stats with a full range scan. Incremental maintenance using running min/max would eliminate this for large history sets.
 - **Socket authentication** — a shared-secret handshake between Fantom and Rust would be appropriate for multi-tenant deployments where per-process isolation is not guaranteed.

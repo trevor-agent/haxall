@@ -36,6 +36,7 @@ All milestones and production phases are complete. Recorded here for reference.
 | O1 Incremental dis updates | 2026-02-23 | `bfe2f0b7` ✅ |
 | O2 Tag presence index | 2026-02-23 | `6b997a4f` ✅ |
 | F1 isSpec filter support | 2026-02-23 | `f964320a` ✅ |
+| N2 Prefix rename | 2026-02-23 | `a03d168e` ✅ |
 
 ---
 
@@ -43,27 +44,7 @@ All milestones and production phases are complete. Recorded here for reference.
 
 Ordered by implementation priority. All are tracked in DESIGN.md §16 Future Work.
 
-### 1. N2 — Prefix Rename
-
-**Priority:** High (last blocked gate case)
-**Effort:** Medium
-**Scope:** Rust only — no protocol or Fantom changes
-
-The `PrefixTest` gate case for prefix rename is currently skipped. When a Haxall
-project renames its id prefix, all record ids and all Ref-valued tags in persistent
-storage must be rewritten atomically.
-
-Approach: a new `PREFIX_RENAME (0x0070)` RPC. Rust opens a single write transaction,
-iterates all RECORDS entries, rewrites each id key and normalizes any `Ref` values
-whose id begins with the old prefix, then commits in one atomic batch. Fantom sends
-the old and new prefix strings and waits for the response before updating its own
-cache.
-
-Gate impact: `PrefixTest` unskipped and green.
-
----
-
-### 2. O3 — Incremental His_Stat
+### 1. O3 — Incremental His_Stat
 
 **Priority:** Medium (performance)
 **Effort:** Small
@@ -81,7 +62,7 @@ write). The existing `HIS_STAT` RPC and Fantom stats cache are unchanged.
 
 ---
 
-### 3. N1 — Chunked readAll Responses
+### 2. N1 — Chunked readAll Responses
 
 **Priority:** Medium (scale safety)
 **Effort:** Medium
@@ -103,7 +84,7 @@ mid-stream).
 
 ---
 
-### 4. S1 — Socket Authentication
+### 3. S1 — Socket Authentication
 
 **Priority:** Medium (security)
 **Effort:** Small-Medium
@@ -121,7 +102,7 @@ constant-time string comparison.
 
 ---
 
-### 5. Namespace Reload Hook (Upstream Contribution)
+### 4. Namespace Reload Hook (Upstream Contribution)
 
 **Priority:** Low (upstream Haxall)
 **Effort:** Small
@@ -140,7 +121,7 @@ the main work is the upstream coordination.
 
 ---
 
-### 6. Performance Benchmarks
+### 5. Performance Benchmarks
 
 **Priority:** Low (validation)
 **Effort:** Medium

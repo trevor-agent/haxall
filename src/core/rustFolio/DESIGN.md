@@ -210,12 +210,39 @@ Each `Record` in `RecordCache` maintains three layers:
 - `transient` — in-memory overlay; lost on restart
 - `merged` — `persistent + transient`; returned by reads
 
-### 4.5 Ref Normalization and ID Prefixes
+### 4.5 Ref Normalization, ID Prefixes, and Prefix Rename
 
 Projects in Haxall use a string prefix for all record ids (e.g., `p:myproject:r:`).
 The Rust process handles prefix normalization in the commit engine: relative Refs
 in tag values are expanded to absolute form, and the id tag is normalized before
 persistence. `Ref.nullRef` (id `"null"`) is explicitly exempt.
+
+**Ref dis normalization:** During commit, Ref dis values are always derived from
+the live record in the cache — if the referenced record exists, its computed dis
+is used; if it does not exist, the dis is stripped (`ref.noDis`). This matches
+hxFolio's `normRef` semantics and ensures that caller-supplied dis strings for
+non-existent records do not persist.
+
+**Prefix rename:** When a project is reopened with a different `idPrefix` than
+what was last stored, Rust detects the mismatch in `Server::open()` before
+accepting any connections and executes an atomic rename. The stored prefix is
+maintained in the META table under the key `"idPrefix"`. Rename logic:
+
+1. Compare `config.id_prefix` against `META["idPrefix"]`.
+2. If both are non-empty and differ: call `Storage::rename_prefix(old, new)`.
+3. `rename_prefix` opens a single redb write transaction and rewrites:
+   - **RECORDS** table: keys (record ids) and all `Val::Ref` values inside each
+     serialized dict (including Refs inside lists, nested dicts, and grids).
+   - **HISTORY** composite keys: `[u16 id_len][id_bytes][8 ticks_bytes]` — the
+     id portion is renamed and `u16 id_len` is recalculated to handle
+     variable-length prefix changes (old and new prefix may differ in length).
+   - **HISTORY_META** keys (point id strings).
+   - **META** `"idPrefix"` entry — updated in the same transaction.
+4. Commits atomically — either all tables rename or none do (crash-safe).
+
+External Refs (ids with a different prefix) and `Ref.nullRef` are never touched.
+Dis strings on Refs are preserved unchanged (they are display labels, not paths).
+After rename, the cache is loaded from the rewritten storage as normal.
 
 ---
 
@@ -663,6 +690,7 @@ Decisions are identified by the codes used in `PROGRESS.md`.
 | DEV-012 | Reconnect inline in folio actor | The folio actor is single-threaded; reconnect within an actor message causes subsequent messages to queue naturally. No explicit state machine, no locking, no reconnect thread. |
 | DEV-013 | Tag presence index in RecordCache | Secondary `HashMap<tag, HashSet<id>>` maintained against the merged view. Enables O(result_set) evaluation for Has-based filter leading terms by intersecting candidate sets before the full filter runs. Falls back to full scan for Or-rooted filters and non-Has leading terms. |
 | DEV-014 | isSpec via pushed spec hierarchy (SPEC_UPDATE) | Rust resolves isSpec in O(1) using a parent→subtypes map pushed from Fantom at open/reconnect. Rejected filter rewriting (Option C): ph::Point has 100–200 subtypes in production; an Or of 200 Eq nodes is worse than a full scan. |
+| DEV-015 | Prefix rename in Server::open(), not via RPC | hxFolio sidesteps prefix rename by storing relative Refs (prefix applied on load). rustFolio stores absolute Refs, so rename requires rewriting all stored data. Performed at startup before accepting connections — no new opcode, no Fantom changes, crash-safe via single write transaction. |
 
 ---
 
@@ -674,11 +702,6 @@ The following improvements are planned but not yet implemented:
 stat row. `HIS_WRITE` updates the stat row in-place (a single metadata write per
 write batch). Incremental stat maintenance (running min/max) can eliminate the
 occasional need for a full history scan on stat correction.
-
-**Prefix rename:** Haxall supports renaming the project's record id prefix. This
-requires rewriting all record ids and all Ref-valued tags atomically — a non-trivial
-Rust-side operation that is not yet implemented. The `PrefixTest` gate case for
-prefix rename is currently skipped.
 
 **Socket authentication:** A shared-secret handshake in the protocol would be
 appropriate for deployments where per-process isolation is not guaranteed.
