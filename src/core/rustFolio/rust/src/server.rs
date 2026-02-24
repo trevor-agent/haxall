@@ -78,15 +78,11 @@ impl Server {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let port = listener.local_addr()?.port();
 
-        // Signal READY: write port to {dir}/.rust-folio.port, then print "READY" to stdout.
-        // Fantom's Process API cannot read from process stdout directly (the out field
-        // is an OutStream that receives process output, not an InStream to read from).
-        // The port file gives Fantom a reliable way to retrieve the port.
+        // Signal ready: write the bound port to {dir}/.rust-folio.port.
+        // Fantom polls for this file rather than reading our stdout, because
+        // Fantom's Process.out is a write-only OutStream (DEV-003).
         let port_file = self.config.dir.join(".rust-folio.port");
         std::fs::write(&port_file, port.to_string())?;
-
-        println!("READY:{}", port);
-        std::io::stdout().flush()?;
 
         tracing::info!(port = port, "listening for connection");
 

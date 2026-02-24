@@ -61,9 +61,7 @@ class RustFolioProcess
       args.addAll(["--id-prefix", config.idPrefix])
 
     p := Process(args)
-    p.mergeErr = true     // stderr → Env.out (logging)
-    // Leave p.out as default (Env.cur.out) so Fantom receives the READY line
-    // but we don't actually parse it — we use the port file instead.
+    p.mergeErr = true     // merge stderr into stdout → forwarded to Env.cur.out (logging)
     process = p
     p.run
 
