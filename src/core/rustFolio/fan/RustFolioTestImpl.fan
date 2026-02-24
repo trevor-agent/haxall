@@ -25,8 +25,8 @@ class RustFolioTestImpl : FolioTestImpl
   ** History fully implemented (RustFolioHis, backed by redb)
   override Bool supportsHis() { true }
 
-  ** Id prefix rename not implemented.
-  override Bool supportsIdPrefixRename() { false }
+  ** Id prefix rename implemented in Server::open() via atomic redb rewrite.
+  override Bool supportsIdPrefixRename() { true }
 
   **
   ** Refs cross a process boundary and are deserialized fresh each time.

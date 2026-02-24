@@ -21,6 +21,52 @@ use crate::types::*;
 use crate::types_ser::*;
 use crate::types_de::*;
 
+// ── Prefix rename helpers ─────────────────────────────────────────────────────
+
+/// Replace the leading `old` prefix in `s` with `new`, returning a new String.
+/// If `s` does not start with `old`, returns `s` unchanged as a new String.
+fn prefix_replace(s: &str, old: &str, new: &str) -> String {
+    if s.starts_with(old) {
+        format!("{}{}", new, &s[old.len()..])
+    } else {
+        s.to_string()
+    }
+}
+
+/// Recursively rename all Ref ids in a Val that start with `old` prefix.
+fn rename_val(val: Val, old: &str, new: &str) -> Val {
+    match val {
+        Val::Ref(r) if r.id.starts_with(old) => {
+            Val::Ref(HRef { id: format!("{}{}", new, &r.id[old.len()..]), dis: r.dis })
+        }
+        Val::List(items) => {
+            Val::List(items.into_iter().map(|v| rename_val(v, old, new)).collect())
+        }
+        Val::Dict(d) => Val::Dict(rename_refs_in_dict(d, old, new)),
+        Val::Grid(g) => {
+            let new_rows = g.rows.into_iter()
+                .map(|row| rename_refs_in_dict(row, old, new))
+                .collect();
+            Val::Grid(Grid {
+                meta: rename_refs_in_dict(g.meta, old, new),
+                cols: g.cols,   // column names are plain strings, not Refs
+                rows: new_rows,
+            })
+        }
+        other => other,
+    }
+}
+
+/// Walk all tags in a Dict and rename any Ref values that start with `old`.
+fn rename_refs_in_dict(dict: Dict, old: &str, new: &str) -> Dict {
+    let tags = dict.tags.into_iter()
+        .map(|(name, val)| (name, rename_val(val, old, new)))
+        .collect();
+    Dict { tags }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 const RECORDS:      TableDefinition<&str,  &[u8]> = TableDefinition::new("records");
 const META:         TableDefinition<&str,  &[u8]> = TableDefinition::new("meta");
 const HISTORY:      TableDefinition<&[u8], &[u8]> = TableDefinition::new("history");
@@ -286,6 +332,150 @@ impl Storage {
                 Ok(HisStat { size, first_ticks, last_ticks })
             }
         }
+    }
+
+    // ── Prefix rename ────────────────────────────────────────────────────────
+
+    /// Read the stored id prefix from META, if any.
+    pub fn read_id_prefix(&self) -> Result<Option<String>> {
+        let tx    = self.db.begin_read()?;
+        let table = tx.open_table(META)?;
+        match table.get("idPrefix")? {
+            None    => Ok(None),
+            Some(v) => {
+                let s = String::from_utf8(v.value().to_vec())
+                    .map_err(|_| FolioError::Protocol("invalid utf8 in META idPrefix".into()))?;
+                if s.is_empty() { Ok(None) } else { Ok(Some(s)) }
+            }
+        }
+    }
+
+    /// Write the id prefix to META (standalone transaction).
+    pub fn write_id_prefix(&self, prefix: &str) -> Result<()> {
+        let tx = self.db.begin_write()?;
+        {
+            let mut table = tx.open_table(META)?;
+            table.insert("idPrefix", prefix.as_bytes())?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Atomically rename all stored data from `old` prefix to `new` prefix.
+    ///
+    /// Rewrites:
+    ///   - RECORDS table keys (record ids) and all Ref values inside each dict
+    ///   - HISTORY composite keys — the `[u16 id_len][id_bytes]` prefix portion
+    ///     is rebuilt with the new id length (handles variable-length prefix changes)
+    ///   - HISTORY_META keys (point ids)
+    ///   - META "idPrefix" entry
+    ///
+    /// All changes are committed in a single write transaction — either all
+    /// tables are renamed atomically or none are (crash-safe).
+    pub fn rename_prefix(&self, old: &str, new: &str) -> Result<()> {
+        let tx = self.db.begin_write()?;
+        {
+            // ── RECORDS ──────────────────────────────────────────────────────
+            let mut rec_table = tx.open_table(RECORDS)?;
+
+            // Collect all entries before mutating (cannot mutate while iterating).
+            let all_records: Vec<(String, Vec<u8>)> = {
+                let mut v = Vec::new();
+                for entry in rec_table.iter()? {
+                    let (k, val) = entry?;
+                    v.push((k.value().to_string(), val.value().to_vec()));
+                }
+                v
+            };
+
+            for (old_id, bytes) in &all_records {
+                let new_id = prefix_replace(old_id, old, new);
+                let mut pos = 0usize;
+                let dict     = read_dict(bytes, &mut pos)?;
+                let new_dict = rename_refs_in_dict(dict, old, new);
+                let mut new_bytes = Vec::new();
+                write_dict(&mut new_bytes, &new_dict);
+
+                if new_id != *old_id {
+                    rec_table.remove(old_id.as_str())?;
+                    rec_table.insert(new_id.as_str(), new_bytes.as_slice())?;
+                } else if new_bytes != *bytes {
+                    // Same key but Ref values inside changed (external-prefix record
+                    // whose tags reference renamed internal records).
+                    rec_table.insert(old_id.as_str(), new_bytes.as_slice())?;
+                }
+            }
+
+            // ── HISTORY composite keys ────────────────────────────────────────
+            // Key layout: [u16 id_len][id_bytes][8 ticks_bytes]
+            // Rename: extract id, if starts with old prefix rebuild key with new id
+            // (u16 id_len recalculated — handles variable-length prefix changes).
+            let mut his_table = tx.open_table(HISTORY)?;
+
+            let his_entries: Vec<(Vec<u8>, Vec<u8>)> = {
+                let mut v = Vec::new();
+                for entry in his_table.iter()? {
+                    let (k, val) = entry?;
+                    let key = k.value().to_vec();
+                    if key.len() >= 2 {
+                        let id_len = u16::from_be_bytes([key[0], key[1]]) as usize;
+                        if key.len() >= 2 + id_len {
+                            let id_bytes = &key[2..2 + id_len];
+                            if id_bytes.starts_with(old.as_bytes()) {
+                                v.push((key, val.value().to_vec()));
+                            }
+                        }
+                    }
+                }
+                v
+            };
+
+            for (old_key, val_bytes) in &his_entries {
+                let old_id_len  = u16::from_be_bytes([old_key[0], old_key[1]]) as usize;
+                let old_id_str  = std::str::from_utf8(&old_key[2..2 + old_id_len])
+                    .map_err(|_| FolioError::Protocol("invalid utf8 in HISTORY key".into()))?;
+                let ticks_bytes = &old_key[2 + old_id_len..]; // always 8 bytes
+
+                let new_id      = prefix_replace(old_id_str, old, new);
+                let new_id_bytes = new_id.as_bytes();
+
+                // Rebuild composite key with corrected u16 id_len.
+                let mut new_key = Vec::with_capacity(2 + new_id_bytes.len() + ticks_bytes.len());
+                new_key.extend_from_slice(&(new_id_bytes.len() as u16).to_be_bytes());
+                new_key.extend_from_slice(new_id_bytes);
+                new_key.extend_from_slice(ticks_bytes);
+
+                his_table.remove(old_key.as_slice())?;
+                his_table.insert(new_key.as_slice(), val_bytes.as_slice())?;
+            }
+
+            // ── HISTORY_META ──────────────────────────────────────────────────
+            let mut his_meta_table = tx.open_table(HISTORY_META)?;
+
+            let his_meta_entries: Vec<(String, Vec<u8>)> = {
+                let mut v = Vec::new();
+                for entry in his_meta_table.iter()? {
+                    let (k, val) = entry?;
+                    if k.value().starts_with(old) {
+                        v.push((k.value().to_string(), val.value().to_vec()));
+                    }
+                }
+                v
+            };
+
+            for (old_id, stat_bytes) in &his_meta_entries {
+                let new_id = prefix_replace(old_id, old, new);
+                his_meta_table.remove(old_id.as_str())?;
+                his_meta_table.insert(new_id.as_str(), stat_bytes.as_slice())?;
+            }
+
+            // ── META idPrefix ─────────────────────────────────────────────────
+            let mut meta_table = tx.open_table(META)?;
+            meta_table.insert("idPrefix", new.as_bytes())?;
+        }
+        tx.commit()?;
+        tracing::info!(old = %old, new = %new, "id prefix rename complete");
+        Ok(())
     }
 
     // ── Record operations ────────────────────────────────────────────────────

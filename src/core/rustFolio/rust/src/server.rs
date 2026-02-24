@@ -33,6 +33,30 @@ impl Server {
     /// Open the database and start the server.
     pub fn open(config: Config) -> Result<Self> {
         let storage = Storage::open(&config.db_path())?;
+
+        // ── Prefix rename (before cache load) ────────────────────────────────
+        // If the caller supplied a different id prefix than what is stored in
+        // META, atomically rewrite all RECORDS keys, HISTORY composite keys,
+        // HISTORY_META keys, and Ref values inside every record dict so that
+        // stored data reflects the new prefix before any connection is accepted.
+        let stored_prefix = storage.read_id_prefix()?;
+        let new_prefix    = config.id_prefix.as_deref().unwrap_or("");
+
+        let stored_str = stored_prefix.as_deref().unwrap_or("");
+        if stored_str != new_prefix {
+            if !stored_str.is_empty() && !new_prefix.is_empty() {
+                // Both sides known and non-empty → full rename.
+                tracing::info!(old = %stored_str, new = %new_prefix, "id prefix rename detected");
+                storage.rename_prefix(stored_str, new_prefix)?;
+                // rename_prefix updates META "idPrefix" in the same transaction.
+            } else {
+                // New DB, upgrade from a pre-rename-feature build, or prefix
+                // cleared — just record the current prefix without renaming.
+                storage.write_id_prefix(new_prefix)?;
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         let cur_ver = storage.read_cur_ver()?;
         let mut cache = RecordCache::new(cur_ver);
         let records = storage.load_all_records()?;

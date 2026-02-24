@@ -50,9 +50,7 @@ impl<'a> Parser<'a> {
     }
 
     fn peek_char(&self) -> Option<char> {
-        let s = self.input[self.pos..].trim_start();
-        let trimmed_off = self.input[self.pos..].len() - s.len();
-        s.chars().next()
+        self.input[self.pos..].trim_start().chars().next()
     }
 
     // Skip whitespace and return current position after trim

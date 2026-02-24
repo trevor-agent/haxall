@@ -202,12 +202,16 @@ fn normalize_refs_in_val(val: &Val, config: &Config, cache: Option<&RecordCache>
     match val {
         Val::Ref(r) => {
             let abs_id = normalize_id(&r.id, config);
-            // Carry original dis if present; otherwise try to look up from cache.
-            let dis = r.dis.clone().or_else(|| {
-                cache.and_then(|c| c.get_any(&abs_id))
-                     .and_then(|rec| rec.merged.get("dis"))
-                     .and_then(|v| if let Val::Str(s) = v { Some(s.clone()) } else { None })
-            });
+            // When cache is available (commit path): derive dis from the live record,
+            // matching hxFolio normRef semantics — if the referenced record exists,
+            // use its dis; if it does not exist, strip dis (ref.noDis).
+            // When cache is absent: preserve the existing dis (non-commit contexts).
+            let dis = match cache {
+                Some(c) => c.get_any(&abs_id)
+                    .and_then(|rec| rec.merged.get("dis"))
+                    .and_then(|v| if let Val::Str(s) = v { Some(s.clone()) } else { None }),
+                None => r.dis.clone(),
+            };
             if abs_id == r.id && dis == r.dis {
                 val.clone()
             } else {
