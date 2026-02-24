@@ -187,47 +187,75 @@ impl Storage {
     /// Write a batch of history items for a single point.
     ///
     /// `items` is a list of `(ticks, val_bytes)` pairs already validated and
-    /// sorted by the Fantom side (via FolioUtil.hisWriteCheck).  Each pair
-    /// is upserted into the HISTORY table by ticks key.  After the write the
-    /// HISTORY_META row for the point is updated atomically with the new
-    /// size / first / last stats.
+    /// sorted ascending by the Fantom side (via FolioUtil.hisWriteCheck).  Each
+    /// pair is upserted into the HISTORY table by ticks key.  The HISTORY_META
+    /// stat row is updated incrementally — O(batch) rather than O(n_total):
+    ///
+    ///   - size:  += count of items whose key did not already exist (no his_delete,
+    ///             so size is monotonically non-decreasing).
+    ///   - first: min(existing.first, items[0].ticks)   — monotonically non-increasing.
+    ///   - last:  max(existing.last,  items[last].ticks) — monotonically non-decreasing.
+    ///
+    /// All three properties are monotonic and commutative, making the incremental
+    /// update always correct without a range scan.
     ///
     /// Returns the updated HisStat for the point.
     pub fn his_write(&self, id: &str, items: &[(i64, Vec<u8>)]) -> Result<HisStat> {
+        if items.is_empty() {
+            return self.his_stat(id);
+        }
         let tx = self.db.begin_write()?;
         {
             let mut table      = tx.open_table(HISTORY)?;
             let mut meta_table = tx.open_table(HISTORY_META)?;
 
+            // Read existing stat row (O(1)) to seed the incremental update.
+            let existing: Option<HisStat> = match meta_table.get(id)? {
+                None => None,
+                Some(v) => {
+                    let b = v.value();
+                    if b.len() < 24 { None } else {
+                        Some(HisStat {
+                            size:        u64::from_be_bytes(b[0..8].try_into().unwrap()),
+                            first_ticks: i64::from_be_bytes(b[8..16].try_into().unwrap()),
+                            last_ticks:  i64::from_be_bytes(b[16..24].try_into().unwrap()),
+                        })
+                    }
+                }
+            };
+
+            // Upsert items.  Count only new keys so size_delta reflects net additions.
+            // table.get() on a WriteTransaction table reflects in-progress inserts, so
+            // items with duplicate ticks within the same batch are counted only once.
+            let mut size_delta = 0u64;
             for (ticks, val_bytes) in items {
                 let key = make_his_key(id, *ticks);
+                if table.get(key.as_slice())?.is_none() { size_delta += 1; }
                 table.insert(key.as_slice(), val_bytes.as_slice())?;
             }
 
-            // Compute updated stats with a single forward scan of the point's range.
-            let prefix      = make_his_prefix(id);
-            let prefix_min: Vec<u8> = { let mut p = prefix.clone(); p.extend_from_slice(&[0u8; 8]);    p };
-            let prefix_max: Vec<u8> = { let mut p = prefix.clone(); p.extend_from_slice(&[0xFFu8; 8]); p };
+            // Incremental stat: items are pre-sorted ascending, so items[0] is the
+            // batch minimum and items[last] is the batch maximum.
+            let batch_first = items[0].0;
+            let batch_last  = items[items.len() - 1].0;
+            let new_stat = match existing {
+                None    => HisStat {
+                    size:        size_delta,
+                    first_ticks: batch_first,
+                    last_ticks:  batch_last,
+                },
+                Some(s) => HisStat {
+                    size:        s.size + size_delta,
+                    first_ticks: s.first_ticks.min(batch_first),
+                    last_ticks:  s.last_ticks.max(batch_last),
+                },
+            };
 
-            let mut size        = 0u64;
-            let mut first_ticks = 0i64;
-            let mut last_ticks  = 0i64;
-            let mut first_seen  = false;
-
-            for entry in table.range(prefix_min.as_slice()..=prefix_max.as_slice())? {
-                let (k, _) = entry?;
-                let key_bytes = k.value();
-                let t = decode_ticks(&key_bytes[key_bytes.len() - 8..]);
-                if !first_seen { first_ticks = t; first_seen = true; }
-                last_ticks = t;
-                size += 1;
-            }
-
-            // Persist the stats row.
+            // Persist updated stat row atomically with the history inserts.
             let mut stat_bytes = [0u8; 24];
-            stat_bytes[0..8].copy_from_slice(&size.to_be_bytes());
-            stat_bytes[8..16].copy_from_slice(&first_ticks.to_be_bytes());
-            stat_bytes[16..24].copy_from_slice(&last_ticks.to_be_bytes());
+            stat_bytes[0..8].copy_from_slice(&new_stat.size.to_be_bytes());
+            stat_bytes[8..16].copy_from_slice(&new_stat.first_ticks.to_be_bytes());
+            stat_bytes[16..24].copy_from_slice(&new_stat.last_ticks.to_be_bytes());
             meta_table.insert(id, stat_bytes.as_slice())?;
         }
         tx.commit()?;
