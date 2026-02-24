@@ -51,9 +51,9 @@ const class RustFolio : Folio
     proc := RustFolioProcess(dir)
     port := proc.start(config)
 
-    // Connect over TCP
+    // Connect over TCP (token from port file for auth)
     conn := RustFolioConn()
-    conn.connect(port)
+    conn.connect(port, proc.token)
 
     // Wrap mutable objects in Unsafe so they can be stored in AtomicRef.
     connRef    = AtomicRef(Unsafe(conn))
@@ -326,9 +326,9 @@ const class RustFolio : Folio
     proc := RustFolioProcess(dir)
     port := proc.start(config)
 
-    // 3. Connect
+    // 3. Connect (token from port file for auth)
     newConn := RustFolioConn()
-    newConn.connect(port)
+    newConn.connect(port, proc.token)
 
     // 4. Q3 — curVer delta detection (phantom commit warning)
     postReconnectVer := newConn.readCurVer

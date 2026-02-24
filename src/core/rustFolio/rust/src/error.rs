@@ -29,6 +29,9 @@ pub enum FolioError {
     #[error("History write error: {0}")]
     HisWrite(String),
 
+    #[error("Authentication failed: bad or missing token")]
+    AuthFailed,
+
     #[error("Protocol error: {0}")]
     Protocol(String),
 

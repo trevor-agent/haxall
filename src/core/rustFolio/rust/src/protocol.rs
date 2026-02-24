@@ -44,10 +44,27 @@ pub mod opcode {
     pub const SPEC_UPDATE:   u16 = 0x0060;
 }
 
-/// Perform the version handshake (server side).
-pub fn server_handshake<S: Read + Write>(stream: &mut S) -> Result<()> {
-    // Read client handshake: 6 bytes (4 magic + 2 version)
-    let mut buf = [0u8; 6];
+/// Length of the auth token: 32 raw bytes = 256 bits of entropy.
+/// Transmitted as raw bytes in the handshake (stored as 64 hex chars in the port file).
+pub const TOKEN_LEN: usize = 32;
+
+/// Constant-time byte-slice equality.  Prevents timing oracles on token comparison.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() { return false; }
+    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// Perform the version + auth handshake (server side).
+///
+/// Handshake wire format:
+///   Client → Server: [magic 4][version 2][token TOKEN_LEN] = 38 bytes
+///   Server → Client: [magic 4][version 2][status 1]        =  7 bytes
+///     status 0x00 = ok
+///     status 0x01 = version mismatch
+///     status 0x02 = auth failed
+pub fn server_handshake<S: Read + Write>(stream: &mut S, expected_token: &[u8; TOKEN_LEN]) -> Result<()> {
+    // Read client handshake: 4 magic + 2 version + TOKEN_LEN token
+    let mut buf = [0u8; 6 + TOKEN_LEN];
     stream.read_exact(&mut buf)?;
 
     if &buf[0..4] != MAGIC {
@@ -55,11 +72,10 @@ pub fn server_handshake<S: Read + Write>(stream: &mut S) -> Result<()> {
     }
     let client_ver = u16::from_be_bytes([buf[4], buf[5]]);
     if client_ver != PROTOCOL_VERSION {
-        // Write rejection
         let mut resp = Vec::with_capacity(7);
         resp.extend_from_slice(MAGIC);
         resp.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
-        resp.push(0x01); // status: incompatible
+        resp.push(0x01); // status: version mismatch
         stream.write_all(&resp)?;
         return Err(FolioError::Protocol(format!(
             "Protocol version mismatch: client={:#06x} server={:#06x}",
@@ -67,7 +83,19 @@ pub fn server_handshake<S: Read + Write>(stream: &mut S) -> Result<()> {
         )));
     }
 
-    // Write acceptance: 7 bytes (4 magic + 2 version + 1 status)
+    // Validate token with constant-time comparison.
+    let client_token = &buf[6..6 + TOKEN_LEN];
+    if !ct_eq(client_token, expected_token) {
+        let mut resp = Vec::with_capacity(7);
+        resp.extend_from_slice(MAGIC);
+        resp.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
+        resp.push(0x02); // status: auth failed
+        stream.write_all(&resp)?;
+        stream.flush()?;
+        return Err(FolioError::AuthFailed);
+    }
+
+    // Write acceptance.
     let mut resp = Vec::with_capacity(7);
     resp.extend_from_slice(MAGIC);
     resp.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
@@ -77,12 +105,13 @@ pub fn server_handshake<S: Read + Write>(stream: &mut S) -> Result<()> {
     Ok(())
 }
 
-/// Perform the version handshake (client side).
-pub fn client_handshake<S: Read + Write>(stream: &mut S) -> Result<()> {
-    // Send: 4 magic + 2 version
-    let mut req = Vec::with_capacity(6);
+/// Perform the version + auth handshake (client side).
+pub fn client_handshake<S: Read + Write>(stream: &mut S, token: &[u8; TOKEN_LEN]) -> Result<()> {
+    // Send: 4 magic + 2 version + TOKEN_LEN token
+    let mut req = Vec::with_capacity(6 + TOKEN_LEN);
     req.extend_from_slice(MAGIC);
     req.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
+    req.extend_from_slice(token);
     stream.write_all(&req)?;
     stream.flush()?;
 
@@ -93,10 +122,12 @@ pub fn client_handshake<S: Read + Write>(stream: &mut S) -> Result<()> {
     if &buf[0..4] != MAGIC {
         return Err(FolioError::Protocol("Bad magic in server handshake response".into()));
     }
-    if buf[6] != 0x00 {
-        return Err(FolioError::Protocol("Server rejected handshake (version mismatch)".into()));
+    match buf[6] {
+        0x00 => Ok(()),
+        0x01 => Err(FolioError::Protocol("Server rejected handshake: version mismatch".into())),
+        0x02 => Err(FolioError::AuthFailed),
+        s    => Err(FolioError::Protocol(format!("Server rejected handshake: unknown status {:#04x}", s))),
     }
-    Ok(())
 }
 
 /// A decoded request message.

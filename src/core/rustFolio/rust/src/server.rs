@@ -27,6 +27,10 @@ pub struct Server {
     storage: Storage,
     cache:   RecordCache,
     closed:  bool,
+    /// Auth token validated during the TCP handshake.
+    /// Generated from /dev/urandom at startup; written (hex-encoded) into
+    /// the port file so only the process that spawned us knows the secret.
+    token:   [u8; protocol::TOKEN_LEN],
 }
 
 impl Server {
@@ -69,7 +73,11 @@ impl Server {
             "database opened"
         );
 
-        Ok(Server { config, storage, cache, closed: false })
+        // Generate auth token from /dev/urandom.
+        // Written (hex-encoded) into the port file; validated during handshake.
+        let token = Self::generate_token()?;
+
+        Ok(Server { config, storage, cache, closed: false, token })
     }
 
     /// Bind TCP listener, signal READY:{port}, serve one connection.
@@ -78,11 +86,13 @@ impl Server {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let port = listener.local_addr()?.port();
 
-        // Signal ready: write the bound port to {dir}/.rust-folio.port.
-        // Fantom polls for this file rather than reading our stdout, because
-        // Fantom's Process.out is a write-only OutStream (DEV-003).
+        // Signal ready: write "{port}:{hex-token}" to {dir}/.rust-folio.port.
+        // Fantom polls for this file, reads both port and auth token from it.
+        // chmod 0600 so only the owning user can read the token.
         let port_file = self.config.dir.join(".rust-folio.port");
-        std::fs::write(&port_file, port.to_string())?;
+        let hex_token: String = self.token.iter().map(|b| format!("{:02x}", b)).collect();
+        std::fs::write(&port_file, format!("{}:{}", port, hex_token))?;
+        Self::chmod_port_file(&port_file)?;
 
         tracing::info!(port = port, "listening for connection");
 
@@ -90,8 +100,8 @@ impl Server {
         let (mut stream, peer) = listener.accept()?;
         tracing::info!(peer = %peer, "client connected");
 
-        // Handshake
-        protocol::server_handshake(&mut stream)?;
+        // Handshake (version + auth)
+        protocol::server_handshake(&mut stream, &self.token)?;
         tracing::info!("handshake complete");
 
         self.serve_connection(&mut stream)?;
@@ -492,6 +502,26 @@ impl Server {
 
         self.cache.spec_subtypes = map;
         Ok(Vec::new())
+    }
+
+    /// Generate a cryptographically random auth token from /dev/urandom.
+    fn generate_token() -> Result<[u8; protocol::TOKEN_LEN]> {
+        use std::io::Read;
+        let mut token = [0u8; protocol::TOKEN_LEN];
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut f| f.read_exact(&mut token))
+            .map_err(|e| crate::error::FolioError::Io(e))?;
+        Ok(token)
+    }
+
+    /// Restrict the port file to owner-read/write only (chmod 0600).
+    /// Prevents other local users from reading the auth token.
+    #[cfg(unix)]
+    fn chmod_port_file(path: &std::path::Path) -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(path, perms)?;
+        Ok(())
     }
 
     /// Enrich the id Ref with a dis string derived from the record's "dis" tag.

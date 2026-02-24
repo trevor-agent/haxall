@@ -67,12 +67,13 @@ class RustFolioConn
 //////////////////////////////////////////////////////////////////////////
 
   ** Connect to the rust-folio process on the given port.
-  Void connect(Int port)
+  ** token is the 64-char hex auth token read from the port file.
+  Void connect(Int port, Str token)
   {
     s := TcpSocket()
     s.connect(IpAddr("127.0.0.1"), port)
     socket = s
-    doHandshake(s)
+    doHandshake(s, token)
   }
 
   ** Send Close opcode and disconnect.
@@ -88,27 +89,39 @@ class RustFolioConn
     socket = null
   }
 
-  private Void doHandshake(TcpSocket s)
+  private Void doHandshake(TcpSocket s, Str hexToken)
   {
     out := s.out
     in  := s.in
 
-    // Send: 4 bytes magic + 2 bytes version
+    // Decode hex token (64 chars → 32 raw bytes)
+    tokenBuf := Buf(32)
+    (0..<32).each |i|
+    {
+      hi  := hexToken[i*2].fromDigit(16)
+      lo  := hexToken[i*2+1].fromDigit(16)
+      tokenBuf.write((hi.shiftl(4)).or(lo))
+    }
+
+    // Send: 4 bytes magic + 2 bytes version + 32 bytes token
     out.writeBuf(magic.seek(0))
     out.writeI2(protoVer)
+    out.writeBuf(tokenBuf.seek(0))
     out.flush
 
     // Read: 4 bytes magic + 2 bytes version + 1 byte status
-    // readBufFully on InStream fills the Buf from the stream
     respBuf := in.readBufFully(null, 7).seek(0)
-    // Compare magic bytes 'R','F','O','L'
     if (respBuf.read != 'R' || respBuf.read != 'F' ||
         respBuf.read != 'O' || respBuf.read != 'L')
       throw IOErr("Bad magic bytes in server handshake response")
     respBuf.readU2  // server version (ignored for now)
     status := respBuf.read
-    if (status != 0x00)
-      throw IOErr("Server rejected handshake (status=$status) — protocol version mismatch")
+    switch (status)
+    {
+      case 0x00: return
+      case 0x02: throw IOErr("rust-folio rejected connection: auth failed")
+      default:   throw IOErr("Server rejected handshake (status=$status)")
+    }
   }
 
 //////////////////////////////////////////////////////////////////////////

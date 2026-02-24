@@ -44,6 +44,13 @@ class RustFolioProcess
   ** Folio database directory.
   private File dir
 
+  **
+  ** Auth token read from the port file after startup.
+  ** Format: 64 lowercase hex characters encoding 32 raw bytes.
+  ** Set by waitForPortFile(); cleared on kill().
+  **
+  Str token := ""
+
   new make(File dir) { this.dir = dir }
 
   **
@@ -118,6 +125,7 @@ class RustFolioProcess
   {
     try { process?.kill } catch (Err e) {}
     process = null
+    token = ""
   }
 
 //////////////////////////////////////////////////////////////////////////
@@ -141,9 +149,21 @@ class RustFolioProcess
     {
       if (pf.exists)
       {
+        // Port file format: "{port}:{64-hex-token}"
         content := pf.readAllStr.trim
-        port    := content.toInt(10, false)
-        if (port != null && port > 0 && port < 65536) return port
+        colon   := content.index(":")
+        if (colon != null)
+        {
+          port := content[0..<colon].toInt(10, false)
+          tok  := content[colon+1..-1]
+          // Validate: port in range, token is exactly 64 hex chars
+          if (port != null && port > 0 && port < 65536 &&
+              tok.size == 64 && tok.chars.all |c| { c.isAlphaNum })
+          {
+            token = tok
+            return port
+          }
+        }
       }
       Actor.sleep(pollInterval)
     }
