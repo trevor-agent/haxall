@@ -60,7 +60,7 @@ rustFolio/
     │   ├── server.rs           TCP dispatch — ReadById/ReadAll/CommitAll/Sync
     │   ├── protocol.rs         binary framing (length-prefixed u8/u16/u32/u64/str)
     │   ├── types.rs            Haystack val types (Val, Dict, HRef, …)
-    │   ├── types_ser.rs        serialize vals → wire; enrich_id_dis
+    │   ├── types_ser.rs        serialize vals → wire bytes
     │   ├── types_de.rs         deserialize wire → vals
     │   ├── record_cache.rs     in-memory cache (persistent / transient / merged)
     │   ├── storage.rs          redb backend (RECORDS + HISTORY tables)
@@ -83,15 +83,15 @@ rustFolio/
 
 Communication is a custom **binary wire format** over a TCP loopback socket.
 
-- The Rust process binds an ephemeral port, writes it to
-  `{dir}/.rust-folio.port`, and prints `READY:{port}` to stdout.
-- The Fantom process reads the port file and connects.
+- The Rust process binds an ephemeral port and writes `{port}:{hex-token}` to
+  `{dir}/.rust-folio.port` (chmod 0600).
+- The Fantom process polls for the port file, reads the port and auth token, then connects.
 - Every request is: `[u32 total_len][u8 msg_type][u16 opcode][payload]`
 - Every response mirrors the same frame structure.
 
 Opcodes: `CLOSE`, `SYNC`, `CUR_VER`, `FLUSH_MODE`, `FLUSH`, `READ_BY_ID`,
 `READ_BY_IDS`, `READ_ALL`, `READ_COUNT`, `COMMIT_ALL`, `HIS_READ`,
-`HIS_WRITE`, `HIS_STAT`, `BACKUP_CREATE`.
+`HIS_WRITE`, `HIS_STAT`, `BACKUP_CREATE`, `SPEC_UPDATE`.
 
 ### Ref.dis enrichment
 
@@ -149,7 +149,7 @@ fan src/core/build.fan
 fant testFolio
 ```
 
-Expected: `All tests passed! [7 types, 23 methods, 10200 verifies]`
+Expected: `All tests passed! [7 types, 23 methods, 10234 verifies]`
 
 ---
 
@@ -196,13 +196,6 @@ operations are retried once automatically.
 
 A `WARN` log is emitted if `curVer` advanced during the crash window, indicating
 a "phantom commit" (Scenario A: commit persisted but ACK never reached Fantom).
-
-### Prefix rename unsupported
-
-`PrefixTest` skips the `<Prefix id rename unsupported>` case.
-hxFolio supports renaming all record ids when the project's id prefix changes.
-This requires iterating all records and rewriting their ids atomically — a
-non-trivial Rust-side operation that is not yet implemented.
 
 ---
 
@@ -304,9 +297,7 @@ already available post-read.
 ## Future Improvements
 
 - **Namespace reload hook** — `isSpec` filter evaluation uses a spec hierarchy pushed from Fantom at open/reconnect. Runtime lib changes require a restart to refresh the map. The correct fix is a `onNamespaceModified` callback contributed to `FolioHooks` upstream.
-- **Incremental his_stat** — `HIS_WRITE` currently recomputes stats with a full range scan. Incremental maintenance using running min/max would eliminate this for large history sets.
-- **Socket authentication** — a shared-secret handshake between Fantom and Rust would be appropriate for multi-tenant deployments where per-process isolation is not guaranteed.
-- **Performance benchmarks** — no formal throughput or latency comparison against hxFolio has been conducted.
+- **Performance benchmarks** — no formal throughput or latency comparison against hxFolio has been conducted. See `BENCHMARKS.md` for the plan.
 
 ---
 
@@ -318,9 +309,8 @@ already available post-read.
 |-------|---------|
 | `redb` | Embedded B-tree database (persistent record + history storage) |
 | `chrono` + `chrono-tz` | DateTime handling with full IANA timezone support |
-| `clap` | CLI argument parsing |
 | `thiserror` | Ergonomic error types |
-| `tracing` + `tracing-subscriber` | Structured logging |
+| `tracing` + `tracing-subscriber` | Structured logging (`tracing-subscriber` with `default-features = false`, no ANSI dep) |
 
 **Fantom pod** (`build.fan`):
 

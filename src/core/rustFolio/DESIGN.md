@@ -126,15 +126,27 @@ the semantically correct exception rather than a generic `IOErr`.
 
 ### 3.3 Handshake
 
-On connect, the Fantom client sends a 6-byte handshake:
+On connect, the Fantom client sends a 38-byte handshake:
 ```
-[4 bytes magic: 'R','F','O','L'] [2 bytes protocol version: 0x0001]
+[4 bytes magic: 'R','F','O','L'] [2 bytes protocol version: 0x0001] [32 bytes auth token]
 ```
-The server responds with 7 bytes (magic + version + status byte). A status of
-`0x00` indicates acceptance; any other value indicates a version mismatch.
+The server responds with 7 bytes (magic + version + status byte):
+- `0x00` — accepted
+- `0x01` — protocol version mismatch
+- `0x02` — auth failed (bad or missing token)
 
-The handshake protects against connecting to a stale process left over from a
-previous run or a different version of the binary.
+The auth token is a 32-byte (256-bit) value generated from `/dev/urandom` at
+process startup. It is written hex-encoded alongside the port number into the port
+file (`{dir}/.rust-folio.port`, chmod 0600): `{port}:{hex-token}`. The Fantom
+process reads both from the file before connecting.
+
+The token comparison in the Rust server uses constant-time equality to prevent
+timing oracles. The port file is removed on clean exit.
+
+The handshake protects against two threats: (1) connecting to a stale process from
+a previous run with a different version, and (2) a rogue local process connecting
+to the ephemeral port in the window between bind and Fantom's first connection.
+See DEV-017 for full rationale.
 
 ### 3.4 Opcodes
 
@@ -205,7 +217,7 @@ The commit engine (`commit.rs`) processes each `Diff` in a batch:
 2. **Transient commits:** Update only the in-memory `RecordCache.transient` overlay.
    redb is not involved. `curVer` does not advance.
 
-Each `Record` in `RecordCache` maintains three layers:
+Each `FolioRec` in `RecordCache` maintains three layers:
 - `persistent` — from redb; survives restart
 - `transient` — in-memory overlay; lost on restart
 - `merged` — `persistent + transient`; returned by reads
@@ -260,7 +272,7 @@ non-matching records.
 
 The filter parser (`filter/parser.rs`) is a hand-written recursive-descent parser
 that handles the full Haystack filter grammar. The evaluator (`filter/eval.rs`)
-walks the AST against each `Record.merged` dict.
+walks the AST against each `FolioRec.merged` dict.
 
 ### 5.1 Tag Presence Index
 
@@ -658,14 +670,19 @@ The Rust process binds exclusively to `127.0.0.1` (loopback). No external networ
 access is possible. The connection is established immediately after process spawn;
 the listening port is closed after the first connection is accepted.
 
-Authentication between the Fantom and Rust processes is not implemented. The threat
-model assumes that any process running on the same machine with the ability to
-connect to a loopback port is already within the trust boundary of the Haxall
-deployment. A shared-secret handshake would be appropriate for multi-tenant
-environments where process isolation is not guaranteed.
+**Token authentication (S1):** A 32-byte (256-bit) auth token is generated from
+`/dev/urandom` at startup. It is written hex-encoded alongside the ephemeral port
+into `{dir}/.rust-folio.port` (chmod 0600), so only the owning process user can
+read it. The handshake requires the Fantom client to transmit the raw 32-byte token
+immediately after the magic + version prefix. The Rust server validates it with a
+constant-time comparison and rejects the connection with status `0x02` on failure.
+
+This protects against a rogue local process connecting to the ephemeral port in the
+window between bind and Fantom's first connection. The token file is removed on
+clean exit. See DEV-017 for full rationale.
 
 Password storage for Haxall user accounts remains in `passwords.props` on the
-Fantom side — the Rust process has no knowledge of authentication.
+Fantom side — the Rust process has no knowledge of Haxall user authentication.
 
 ---
 
@@ -702,6 +719,6 @@ Decisions are identified by the codes used in `PROGRESS.md`.
 The following improvements are planned but not yet implemented:
 
 **Performance benchmarks:** No formal throughput or latency comparison against
-hxFolio has been conducted. Baseline benchmarks at representative record counts
-(1k, 10k, 100k records) with mixed read/write workloads would validate the
-design assumptions.
+hxFolio has been conducted. A comprehensive benchmark plan covering Rust
+microbenchmarks (criterion) and Fantom integration benchmarks (both backends) is
+documented in `BENCHMARKS.md`.
