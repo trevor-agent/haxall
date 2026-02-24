@@ -692,18 +692,13 @@ Decisions are identified by the codes used in `PROGRESS.md`.
 | DEV-014 | isSpec via pushed spec hierarchy (SPEC_UPDATE) | Rust resolves isSpec in O(1) using a parent→subtypes map pushed from Fantom at open/reconnect. Rejected filter rewriting (Option C): ph::Point has 100–200 subtypes in production; an Or of 200 Eq nodes is worse than a full scan. |
 | DEV-015 | Prefix rename in Server::open(), not via RPC | hxFolio sidesteps prefix rename by storing relative Refs (prefix applied on load). rustFolio stores absolute Refs, so rename requires rewriting all stored data. Performed at startup before accepting connections — no new opcode, no Fantom changes, crash-safe via single write transaction. |
 | DEV-016 | Custom tracing format matching Fantom log convention | Rust subprocess logs write to stderr (merged into JVM stdout by `RustFolioProcess`). Default tracing-subscriber emits UTC ISO-8601 timestamps that stand out against Fantom's `[HH:MM:SS DD-Mon-YY] [level] [tag]` format. Replaced with a custom `FormatEvent` (`FanLogFormat`) using `chrono::Local` for local time and a `PlainVisitor` that bypasses tracing-subscriber's ANSI field formatting. No new dependencies — `chrono` was already in the tree. |
+| DEV-017 | Token-in-port-file auth (S1) | A rogue local process could connect to the ephemeral port in the window between bind and Fantom's connect. Token placed in the port file (not a separate file) keeps the coordination mechanism atomic — there is no additional window. Port file chmod'd 0600 so only the owning user can read the token. Token transmitted as 32 raw bytes in the handshake (stored as 64 hex chars in the file for readability). Constant-time comparison prevents timing oracles. No new dependencies — token generated from `/dev/urandom` via `std::fs`. |
 
 ---
 
 ## 16. Future Work
 
 The following improvements are planned but not yet implemented:
-
-**Socket authentication (S1):** A shared-secret handshake in the protocol would be
-appropriate for deployments where per-process isolation is not guaranteed. Proposed
-approach: at startup, Rust generates a random token written to a temp file (or passed
-via environment variable). Fantom reads the token and includes it in the `HELLO`
-payload. Rust verifies with constant-time comparison and rejects unknown clients.
 
 **Namespace reload hook:** When Xeto libs are added or removed at runtime, the
 Rust-side spec subtype map (used for `isSpec` filter evaluation) goes stale until

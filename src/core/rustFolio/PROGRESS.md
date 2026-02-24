@@ -45,6 +45,7 @@ All milestones and production phases are complete. Recorded here for reference.
 | L1 Log format alignment | 2026-02-23 | `dd589dd6` ✅ |
 | O3 Incremental his_stat | 2026-02-23 | `70220ac5` ✅ |
 | N1 Chunked readAll | 2026-02-23 | `7139e1fa` ✅ |
+| S1 Socket authentication | 2026-02-23 | `372f141e` ✅ |
 
 ---
 
@@ -52,25 +53,7 @@ All milestones and production phases are complete. Recorded here for reference.
 
 Ordered by implementation priority. All are tracked in DESIGN.md §16 Future Work.
 
-### 1. S1 — Socket Authentication
-
-**Priority:** Medium (security)
-**Effort:** Small-Medium
-**Scope:** Protocol change — both Rust and Fantom
-
-The current handshake (`HELLO` opcode exchange) has no authentication. Any process
-that can connect to the loopback port in the window between `READY:{port}` and the
-Fantom connection gets access to the database.
-
-Approach: shared-secret challenge-response. At startup, Rust generates a random
-token and writes it to a temp file (or passes it via environment variable). Fantom
-reads the token and includes it in the `HELLO` payload. Rust verifies the token,
-rejects unknown clients, and deletes the token file. Requires no crypto beyond a
-constant-time string comparison.
-
----
-
-### 2. Namespace Reload Hook (Upstream Contribution)
+### 1. Namespace Reload Hook (Upstream Contribution)
 
 **Priority:** Low (upstream Haxall)
 **Effort:** Small
@@ -89,7 +72,7 @@ the main work is the upstream coordination.
 
 ---
 
-### 3. Performance Benchmarks
+### 2. Performance Benchmarks
 
 **Priority:** Low (validation)
 **Effort:** Medium
