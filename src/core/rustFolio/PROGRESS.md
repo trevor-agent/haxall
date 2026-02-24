@@ -83,7 +83,7 @@ the rest of haxall.
 | P1 - History persistence | ✅ 2026-02-23 | redb HISTORY + HISTORY_META tables; HIS_READ/HIS_WRITE/HIS_STAT RPCs. Gate: 10200 verifies ALL GREEN. |
 | P2 - Runtime integration | ✅ 2026-02-23 | folio.props backend selection in HxdBoot; hx init + hx run verified; API responding; 6 records persisted across restart. |
 | P3 - Backup | ✅ 2026-02-23 | FolioBackup impl — consistent redb snapshot via logical table copy. BACKUP_CREATE (0x0050) RPC. Gate: ALL GREEN. |
-| P4 - File storage | 🔄 in-progress | FolioFile — Fantom-side disk delegation via LocalFolioFile. |
+| P4 - File storage | ✅ 2026-02-23 | FolioFile — Fantom-side disk delegation via LocalFolioFile. Gate: ALL GREEN. |
 | P5 - Hardening | 🔲 pending | Incremental dis updates (O(n)/commit → dirty-set tracking). Reconnect-on-failure. Prefix rename. Benchmarking vs hxFolio. |
 
 ### P1 Design — History Persistence
