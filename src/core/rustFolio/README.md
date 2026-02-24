@@ -204,14 +204,6 @@ hxFolio supports renaming all record ids when the project's id prefix changes.
 This requires iterating all records and rewriting their ids atomically — a
 non-trivial Rust-side operation that is not yet implemented.
 
-### Full-sweep dis update after every commit
-
-`RustFolioDisMgr.updateAll()` reads all records from Rust after every commit.
-For databases with thousands of records this is O(n) per commit. hxFolio does
-the same work but lazily (async actor, coalesced updates). Optimization
-opportunities: dirty-set tracking, incremental propagation, or a Rust-side
-DisMgr that sets `dis` on records at commit time.
-
 ---
 
 ## Design Notes
@@ -274,6 +266,32 @@ including spec validation (via the xeto namespace), `withIn`/`withOut` semantics
 and async `fileSize` tag commits back to folio. No Rust involvement — binary blobs
 are the wrong workload for a record-oriented B-tree.
 
+### Tag presence index for filter acceleration
+
+`RecordCache` maintains a secondary index: `tag_name → Set<record_id>` tracking
+which records currently have each tag in their merged (persistent + transient)
+view. `query.rs` extracts leading `Has(single_tag)` terms from the top-level AND
+chain of every incoming filter and intersects the corresponding index sets to
+produce a candidate set before running the full filter evaluator. For a filter
+like `point and his`, only records with both tags are visited — the rest are
+skipped without evaluation. Filters with an `Or` at the root or no extractable
+`Has` terms fall back to a full scan. The index is maintained incrementally on
+every commit, including transient commits; the most common transient case (a value
+update that changes no tag keys) has zero index cost.
+
+### isSpec filter support
+
+`isSpec("ph::Point")` checks whether a record's `spec` tag (a Ref to a Xeto type
+name) is the named spec or any of its subtypes. For folio Dict records,
+`MNamespace.specOf` simply reads `rec["spec"]` as a Ref id, so `isSpec` reduces
+to a set membership check. At folio open and after each reconnect,
+`RustFolio.syncSpec()` iterates all types in the Xeto namespace and builds a map
+of `parent_qname → Set<all_subtype_qnames>`, which is pushed to the Rust process
+via `SPEC_UPDATE (0x0060)`. The Rust evaluator resolves `isSpec` in O(1): two
+hash lookups. The spec map is also populated on the first persistent commit after
+the namespace becomes available — safe because `HxLibs.doUpdate()` sets the
+namespace reference before calling `folio.commitAll()`.
+
 ### Fantom-side dis propagation
 
 Ref.disVal is set by `RustFolioDisMgr` rather than by the Rust process because
@@ -285,9 +303,11 @@ already available post-read.
 
 ## Future Improvements
 
-- **Incremental dis updates** — reduce O(n)/commit cost with dirty-set tracking.
-- **Prefix rename** — atomic id rewrite across all records in redb.
-- **Performance benchmarks** — compare throughput and latency against hxFolio at scale.
+- **Prefix rename** — atomic id rewrite across all records in redb. `PrefixTest` currently skips this case.
+- **Namespace reload hook** — `isSpec` filter evaluation uses a spec hierarchy pushed from Fantom at open/reconnect. Runtime lib changes require a restart to refresh the map. The correct fix is a `onNamespaceModified` callback contributed to `FolioHooks` upstream.
+- **Incremental his_stat** — `HIS_WRITE` currently recomputes stats with a full range scan. Incremental maintenance using running min/max would eliminate this for large history sets.
+- **Socket authentication** — a shared-secret handshake between Fantom and Rust would be appropriate for multi-tenant deployments where per-process isolation is not guaranteed.
+- **Performance benchmarks** — no formal throughput or latency comparison against hxFolio has been conducted.
 
 ---
 
