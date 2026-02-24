@@ -17,3 +17,20 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["s
 
 [dev-dependencies]
 tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "filter_bench"
+harness = false
+
+[[bench]]
+name = "cache_bench"
+harness = false
+
+[[bench]]
+name = "proto_bench"
+harness = false
+
+[[bench]]
+name = "storage_bench"
+harness = false

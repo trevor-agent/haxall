@@ -1,6 +1,6 @@
 # rustFolio Benchmark Plan
 
-> **Status:** Draft — pending review before implementation  
+> **Status:** Active — implementation in progress  
 > **Goal:** Comprehensive performance characterization of the rustFolio backend against itself at scale and against hxFolio as baseline
 
 ---
@@ -12,18 +12,31 @@
 3. **Scale** — identify where performance degrades and at what record/batch counts
 4. **Isolate** — separate Rust-internal cost from IPC cost so we know where to optimize if needed
 
+The most architecturally important number in this entire plan is the **IPC floor**:
+the `readById` latency delta between rustFolio and hxFolio. Every rustFolio operation
+pays this cost. Knowing it determines whether future optimization effort belongs in
+Rust code or the IPC layer.
+
 ---
 
 ## 2. Architecture
 
-Two independent benchmark tiers. They measure different things and are both necessary.
+Four independent benchmark tiers. Each measures something different; all are necessary.
 
 ```
+┌──────────────────────────────────────────────────────────┐
+│  Tier 0: Build metrics                                   │
+│  What:   binary size, dep count, compile time            │
+│  Tool:   cargo, wc, shell commands                       │
+│  Value:  dep-hygiene baseline; reviewer will ask         │
+└──────────────────────────────────────────────────────────┘
+
 ┌──────────────────────────────────────────────────────────┐
 │  Tier 1: Rust microbenchmarks (criterion)                │
 │  What:   filter eval, cache ops, serialization, storage  │
 │  Tool:   cargo bench  →  target/criterion/               │
 │  Value:  isolates Rust-internal cost, no IPC noise       │
+│  Warmup: handled automatically by criterion              │
 └──────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────┐
@@ -31,29 +44,54 @@ Two independent benchmark tiers. They measure different things and are both nece
 │  What:   full folio API: readAll, commitAll, his*, open  │
 │  Tool:   BenchFolio.fan harness, runs both backends      │
 │  Value:  real-world path, directly comparable to hxFolio │
+│  Warmup: --warmup N flag (untimed iterations before      │
+│          measurement; required for JVM JIT stability)    │
+│  GC:     -verbose:gc for hxFolio runs to capture pause   │
+│          count + total pause time (explains p99 tail)    │
 └──────────────────────────────────────────────────────────┘
 ```
 
-Tier 2 is the headline. Tier 1 tells us *why*.
+Tier 2 is the headline. Tier 1 tells us *why*. Tier 0 answers the reviewer's first
+question before they ask it.
 
 ---
 
-## 3. Tier 1 — Rust Microbenchmarks
+## 3. Tier 0 — Build Metrics
+
+Captured once before running any performance benchmarks. Snapshot into
+`BENCHMARKS_RESULTS.md` section 0.
+
+| Metric | Command | Notes |
+|--------|---------|-------|
+| Release binary size | `ls -lh target/release/rust-folio` | Stripped size |
+| Direct dependencies | `cargo tree --depth 1 \| wc -l` | Cargo.toml deps only |
+| Total transitive deps | `cargo tree \| grep -c "^[a-z]"` | Full dep tree |
+| Clean release compile | `time cargo build --release` (after `cargo clean`) | Cold build |
+| Incremental compile | `time cargo build --release` (after touching one .rs file) | Hot build |
+
+No pass/fail criteria — these are baselines. Record and move on.
+
+---
+
+## 4. Tier 1 — Rust Microbenchmarks
 
 **Location:** `rust/benches/`  
 **Tooling:** `criterion = { version = "0.5", features = ["html_reports"] }` (dev-dep only)  
 **Run:** `cargo bench` — generates HTML reports in `target/criterion/`
 
-### 3.1 Filter Evaluation (`benches/filter_bench.rs`)
+Criterion handles warmup, outlier detection, and statistical confidence intervals
+automatically. No manual warmup needed for Tier 1.
 
-Measures `filter::matches()` + `query::read_all()` in isolation against an in-memory RecordCache.
-Inputs are pre-seeded; no I/O during timing.
+### 4.1 Filter Evaluation (`benches/filter_bench.rs`)
+
+Measures `filter::matches()` + `query::read_all()` in isolation against an in-memory
+RecordCache. Inputs are pre-seeded; no I/O during timing.
 
 | Benchmark | Filter | Cache Size | Notes |
 |-----------|--------|------------|-------|
 | `filter/has_simple` | `equip` | 10k | Single-tag; exercises tag index |
 | `filter/has_compound` | `equip and point and his` | 10k | Index intersection of 3 sets |
-| `filter/has_compound` | `equip and point and his` | 100k | Scale comparison |
+| `filter/has_compound_100k` | `equip and point and his` | 100k | Scale comparison |
 | `filter/comparison_eq` | `dis == "Pump-1"` | 10k | Eq on string tag |
 | `filter/comparison_num` | `temp > 72` | 10k | Numeric comparison |
 | `filter/path_traversal` | `equip->siteRef->geoCity == "Chicago"` | 10k | 2-hop Ref deref |
@@ -61,11 +99,11 @@ Inputs are pre-seeded; no I/O during timing.
 | `filter/is_spec` | `ph::Equip` | 10k | IsSpec: subtypes map lookup |
 | `filter/no_match` | `ahu and chiller` | 10k | Zero result — early exit |
 
-Each benchmark runs the full `read_all()` path (index lookup → candidate filter → collect).
-Separately benchmark `filter::parse()` for a representative set of filter strings — parse cost
-should be negligible vs. eval but worth confirming.
+Each benchmark runs the full `read_all()` path (index lookup → candidate filter →
+collect). Separately benchmark `filter::parse()` for representative filter strings —
+parse cost should be negligible vs. eval but worth confirming.
 
-### 3.2 Cache Operations (`benches/cache_bench.rs`)
+### 4.2 Cache Operations (`benches/cache_bench.rs`)
 
 | Benchmark | Operation | Scale |
 |-----------|-----------|-------|
@@ -78,7 +116,7 @@ should be negligible vs. eval but worth confirming.
 
 The `read_all_indexed` vs. `read_all_full_scan` delta quantifies the tag index payoff.
 
-### 3.3 Serialization (`benches/proto_bench.rs`)
+### 4.3 Serialization (`benches/proto_bench.rs`)
 
 | Benchmark | Operation | Notes |
 |-----------|-----------|-------|
@@ -90,7 +128,7 @@ The `read_all_indexed` vs. `read_all_full_scan` delta quantifies the tag index p
 
 These isolate wire protocol overhead from everything else.
 
-### 3.4 Storage (`benches/storage_bench.rs`)
+### 4.4 Storage (`benches/storage_bench.rs`)
 
 Direct redb operations, no cache or IPC.
 
@@ -112,14 +150,51 @@ The critical question: does redb's WAL amortize transaction overhead across batc
 
 ---
 
-## 4. Tier 2 — Fantom Integration Benchmarks
+## 5. Tier 2 — Fantom Integration Benchmarks
 
 **Location:** `fan/bench/BenchFolio.fan`  
 **Tooling:** Standalone Fantom script; timing via `Duration.now()`  
-**Run:** `fan BenchFolio.fan [--backend rust|hx|both] [--recs N] [--iters N]`  
-**Output:** Markdown table + raw CSV for further analysis
+**Run:** `fan BenchFolio.fan [--backend rust|hx|both] [--recs N] [--iters N] [--warmup N]`  
+**Output:** Markdown table + raw CSV
 
-### 4.1 Startup
+### 5.1 JVM Warmup
+
+JVM benchmarks without warmup include JIT compilation cost that does not exist at
+steady state. This makes early iterations artificially slow and causes hxFolio
+numbers to look worse than they actually are, producing unfair comparisons.
+
+The `--warmup N` flag runs N **untimed** iterations of each scenario before
+measurement begins. Default: `--warmup 200`. The warmup iterations are excluded
+from all statistics. For scenarios where N < 200 total iterations are being measured
+(e.g., the 100k-record startup test), warmup is capped at `min(warmup, iters/2)`.
+
+The warmup block runs the same operations as the measurement block. For hxFolio,
+200 warmup iterations of `readAll("equip")` are sufficient to drive JIT compilation
+of the hot paths. For rustFolio, the JVM-side is trivially thin (serialize args →
+TCP write → read response → deserialize), so warmup primarily exercises the Fantom
+serializer — but it runs on both backends regardless for consistency.
+
+### 5.2 GC Pause Tracking (hxFolio runs)
+
+When running against the hxFolio backend, the JVM is launched with `-verbose:gc`
+to capture garbage collection pause information. The harness:
+
+1. Pipes JVM stderr to a temp file during the benchmark run.
+2. After measurement completes, parses the GC log to extract:
+   - **Pause count** — number of GC pauses during the measurement window
+   - **Total pause time** — sum of all pause durations (ms)
+   - **Max single pause** — longest individual pause (ms)
+3. Reports these alongside the latency percentiles in the results table.
+
+This directly explains p99 tail latency for hxFolio. When p99 is 10× p50, the GC
+log will show exactly how many pauses occurred and whether they account for the
+tail. Without this, the tail looks like noise — with it, we know whether to tune the
+JVM or accept the behavior as structural to a garbage-collected runtime.
+
+For rustFolio runs, no GC flag is applied (there is no GC on the Rust side; the JVM
+overhead on the Fantom client is minimal and shared with hxFolio).
+
+### 5.3 Startup
 
 | Scenario | Metric | Backends |
 |----------|--------|----------|
@@ -128,12 +203,13 @@ The critical question: does redb's WAL amortize transaction overhead across batc
 | `startup/open_10k` | Open + cache load, 10k records | rust, hx |
 | `startup/open_100k` | Open + cache load, 100k records | rust, hx |
 
-For rustFolio this includes: spawn subprocess → redb scan → cache load → IPC handshake.  
-For hxFolio: zinc file scan → cache load.
+For rustFolio this includes: spawn subprocess → redb scan → cache load → IPC
+handshake. For hxFolio: zinc file scan → cache load.
 
-### 4.2 Read Operations
+### 5.4 Read Operations
 
-All iterations use a pre-seeded database (setup excluded from timing).
+All iterations use a pre-seeded database (setup excluded from timing). Warmup
+iterations precede each scenario.
 
 | Scenario | Filter / Op | Records | Iterations | Backends |
 |----------|-------------|---------|------------|----------|
@@ -146,10 +222,11 @@ All iterations use a pre-seeded database (setup excluded from timing).
 
 Report: **ops/sec** and **p50/p95/p99 latency** across iterations.
 
-`readById` is the baseline: both backends are cache-hits. If rustFolio is slower here
-than hxFolio it's pure IPC overhead, which gives us the IPC floor cost.
+`read/by_id` is the IPC floor measurement. Both backends are cache-hits. The latency
+delta is the per-call IPC overhead. Every other rustFolio result is this number plus
+the cost of the operation itself.
 
-### 4.3 Write Operations
+### 5.5 Write Operations
 
 | Scenario | Op | Batch size | Iterations | Backends |
 |----------|----|------------|------------|----------|
@@ -166,7 +243,7 @@ than hxFolio it's pure IPC overhead, which gives us the IPC floor cost.
 Transient commits are rustFolio-only (hxFolio doesn't implement `supportsTransient()`).
 Batch write performance is a primary expected advantage of redb over zinc file I/O.
 
-### 4.4 History Operations
+### 5.6 History Operations
 
 hxFolio does not implement the history API. These are rustFolio-only.
 
@@ -175,86 +252,93 @@ hxFolio does not implement the history API. These are rustFolio-only.
 | `his/write_100` | `hisWrite` | 100 | 1 | 1k |
 | `his/write_1000` | `hisWrite` | 1000 | 1 | 500 |
 | `his/write_10000` | `hisWrite` | 10000 | 1 | 100 |
-| `his/write_parallel_100pts` | 100-point concurrent writes | 100/pt | 100 | 10 |
+| `his/write_multipoint_100` | Rapid sequential writes, 100 points | 100/pt | 100 pts | 10 |
 | `his/read_full_1k` | `hisRead` no span | 1k items | 1 | 1k |
 | `his/read_full_10k` | `hisRead` no span | 10k items | 1 | 500 |
 | `his/read_full_100k` | `hisRead` no span | 100k items | 1 | 100 |
 | `his/read_span_10pct` | Span (~10% of range) | 10k items | 1 | 500 |
 | `his/stat` | `hisStat` | 10k items | 1 | 10k |
 
-The `his/write_*` series characterizes the incremental stat algorithm under load.  
-The `his/read_span_*` validates the before/in-span/after boundary logic at scale.
+Note: `his/write_multipoint_100` measures rapid sequential submissions to the folio
+actor for 100 different points — not parallel execution. The folio actor processes
+one request at a time; this scenario measures actor mailbox throughput under a
+multi-point write workload.
 
-### 4.5 Mixed Workload (Realistic)
+### 5.7 Mixed Workload (Realistic)
 
-Simulates a running Haxall instance: concurrent reads and writes at a realistic ratio.
+Simulates a running Haxall instance: interleaved reads and writes submitted
+sequentially to the folio actor, which queues and processes them one at a time.
+This is not a concurrency benchmark — it measures actor mailbox throughput and how
+operation mix affects overall throughput.
 
-| Scenario | Read % | Write % | His % | Duration |
-|----------|--------|---------|-------|----------|
-| `mixed/read_heavy` | 90 | 5 | 5 | 30s |
-| `mixed/write_heavy` | 50 | 40 | 10 | 30s |
-| `mixed/his_heavy` | 40 | 10 | 50 | 30s |
+| Scenario | Read % | Write % | His % | Duration | Backends |
+|----------|--------|---------|-------|----------|----------|
+| `mixed/read_heavy` | 90 | 5 | 5 | 30s | rust, hx |
+| `mixed/write_heavy` | 50 | 40 | 10 | 30s | rust, hx |
+| `mixed/his_heavy` | 40 | 10 | 50 | 30s | rust only |
 
-Each scenario runs sequentially (not threaded — folio is single-actor) at realistic cadence.
-Reports: total ops, ops/sec, error count.
+Each scenario submits operations in the specified ratio, sequentially, for the
+given duration. Reports: total ops, ops/sec, operation mix breakdown, error count.
 
 ---
 
-## 5. Scalability Matrix
-
-The key question: how does performance scale with record count?
+## 6. Scalability Matrix
 
 | Metric | 1k recs | 5k recs | 10k recs | 50k recs | 100k recs |
 |--------|---------|---------|----------|----------|-----------|
 | Startup time | — | — | — | — | — |
-| `readAll("equip")` throughput | — | — | — | — | — |
-| `readAll("equip and point")` throughput | — | — | — | — | — |
-| `commitAll` single-record latency | — | — | — | — | — |
-| Memory (RSS) | — | — | — | — | — |
+| `readAll("equip")` ops/sec | — | — | — | — | — |
+| `readAll("equip and point")` ops/sec | — | — | — | — | — |
+| `commitAll` single-record latency p50 | — | — | — | — | — |
+| Memory RSS (rust) | — | — | — | — | — |
+| Memory RSS (hx) | — | — | — | — | — |
 
-Memory is tracked via `/proc/self/rss` on Linux or `ps` on macOS between operations.
+Memory tracked via `ProcessBuilder.out` piped to `ps -o rss` after the seeding
+phase, before benchmark timing begins.
 
 ---
 
-## 6. What to Measure
-
-For each benchmark, capture:
+## 7. What to Measure
 
 | Metric | Unit | Notes |
 |--------|------|-------|
 | Throughput | ops/sec | Primary metric for bulk operations |
 | p50 latency | µs or ms | Typical-case latency |
-| p95 latency | µs or ms | Tail latency (folio is synchronous actor) |
+| p95 latency | µs or ms | Tail latency |
 | p99 latency | µs or ms | Worst-case outliers |
-| Variance | % | High variance indicates GC or OS scheduling jitter |
+| GC pause count | count | hxFolio only; from -verbose:gc log |
+| GC total pause | ms | hxFolio only; sum of all pauses |
+| GC max pause | ms | hxFolio only; longest single pause |
 
-For Tier 1 (criterion): statistical confidence intervals are automatic.  
-For Tier 2 (Fantom): collect raw durations, compute percentiles in the harness.
+When hxFolio shows a high p99/p50 ratio, the GC metrics will explain whether it is
+attributable to garbage collection or to something else (disk I/O, zinc parse, etc.).
 
 ---
 
-## 7. Expected Outcomes & Hypotheses
+## 8. Expected Outcomes & Hypotheses
 
 | Area | Hypothesis | Confidence |
 |------|-----------|------------|
-| `readById` | rustFolio slightly slower due to IPC round-trip overhead | High |
-| `readAll` simple filter, large dataset | rustFolio faster (Rust filter eval vs. Fantom JVM) | Medium |
-| `readAll` compound filter, indexed | rustFolio comparable or faster (tag index intersection in Rust) | Medium |
-| `commitAll` single record | rustFolio slower (redb txn overhead + IPC) vs. hxFolio zinc file | Medium |
-| `commitAll` batch ≥100 | rustFolio faster (redb batches amortize txn cost; zinc writes N files) | High |
-| History write | rustFolio-only; redb should scale linearly with batch size | High |
-| Startup with 100k records | rustFolio slightly slower (redb scan vs. zinc scan) | Low |
-| IPC floor | readById delta tells us the per-call IPC cost (budget for future ops) | High |
-
-The IPC floor is the most architecturally important number. Every rustFolio operation
-pays it. Knowing it tells us whether future optimizations should target Rust-internal
-code or the IPC layer.
+| `readById` IPC floor | rustFolio ~50–200µs slower per call (TCP loopback + ser/deser) | High |
+| `readAll` simple, large dataset | rustFolio faster (Rust filter eval vs. Fantom JVM) | Medium |
+| `readAll` compound, indexed | rustFolio comparable or faster (tag index intersection in Rust) | Medium |
+| `commitAll` single record | rustFolio slower (redb txn + IPC overhead vs. zinc file write) | Medium |
+| `commitAll` batch ≥100 | rustFolio faster (redb batches in one txn; zinc writes N files) | High |
+| History write | Linear with batch size; redb should beat any file-based alternative | High |
+| Startup, 100k records | rustFolio slightly slower (redb scan + subprocess spawn vs. zinc scan) | Low |
+| p99 tail latency hxFolio | GC pauses account for most p99 outliers | Medium |
+| p99 tail latency rustFolio | Low — no GC; occasional OS scheduling noise only | Medium |
 
 ---
 
-## 8. Implementation Plan
+## 9. Implementation Plan
 
-### Phase 1 — Tier 1 Criterion Setup (1 session)
+### Phase 1 — Tier 0 (15 min)
+
+Shell script `bench_tier0.sh` that captures binary size, dep counts, compile times.
+Run once, paste output into `BENCHMARKS_RESULTS.md` §0.
+
+### Phase 2 — Tier 1 Criterion Setup (1 session)
 
 ```
 rust/benches/
@@ -287,41 +371,31 @@ name = "storage_bench"
 harness = false
 ```
 
-### Phase 2 — Tier 2 Fantom Harness (1 session)
+### Phase 3 — Tier 2 Fantom Harness (1 session)
 
 ```
 fan/bench/
-└── BenchFolio.fan     // standalone script
+└── BenchFolio.fan
 ```
 
-Structure:
-```fantom
-class BenchFolio
-{
-  Void main(Str[] args) { /* parse args, run scenarios, print table */ }
-  Void benchReadAll(Folio f, Str filter, Int recs, Int iters) { ... }
-  Void benchCommitAll(Folio f, Int batchSize, Int iters) { ... }
-  Void benchHisWrite(Folio f, Int items, Int iters) { ... }
-  Void printResults() { /* markdown table */ }
-}
-```
+Key implementation details:
+- `--warmup N` (default 200): untimed iterations before measurement
+- `-verbose:gc` on hxFolio JVM; parse GC log after each scenario
+- `Duration.now()` around each operation; collect into `Duration[]`; compute
+  p50/p95/p99 from sorted array
+- Output: markdown table printed to stdout + raw CSV to `bench_results.csv`
 
-Backends instantiated via the same `FolioConfig` mechanism as `testFolio`:
-```fantom
-if (backend == "rust") folio = RustFolio.open(config)
-if (backend == "hx")   folio = HxFolio.open(config)
-```
+### Phase 4 — Run & Record (1 session)
 
-### Phase 3 — Run & Record (1 session)
-
-1. Run Tier 1: `cargo bench` — capture `target/criterion/` HTML reports
-2. Run Tier 2: `fan BenchFolio.fan --backend both --recs 10000 --iters 1000`
-3. Run Tier 2 scalability: `--recs 1000,5000,10000,50000,100000`
-4. Document results in `BENCHMARKS_RESULTS.md`
+1. `./bench_tier0.sh > tier0.txt`
+2. `cargo bench 2>&1 | tee tier1.txt`
+3. `fan BenchFolio.fan --backend both --recs 10000 --warmup 200 --iters 1000`
+4. `fan BenchFolio.fan --backend both --recs 1000,5000,10000,50000,100000 --warmup 100 --iters 500`
+5. Document all results in `BENCHMARKS_RESULTS.md`
 
 ---
 
-## 9. Benchmark Data Generation
+## 10. Benchmark Data Generation
 
 Records seeded with realistic tag structures:
 
@@ -334,12 +408,11 @@ Records seeded with realistic tag structures:
 ```
 
 History seeded with uniform 1-minute interval ticks, `Number` values.
-
-The seeding pass is excluded from benchmark timing (setup only).
+Seeding pass is excluded from benchmark timing.
 
 ---
 
-## 10. Deliverables
+## 11. Deliverables
 
 | Artifact | Description |
 |----------|-------------|
@@ -352,8 +425,9 @@ The seeding pass is excluded from benchmark timing (setup only).
 
 ## Notes & Constraints
 
-- Benchmarks run on Trevor's Mac mini (arm64, Apple Silicon) — note CPU/memory in results
-- All Tier 2 benchmarks run sequentially; folio is a single-actor model so threading is not relevant
+- Benchmarks run on Trevor's Mac mini (arm64, Apple Silicon) — note CPU/memory spec in results
+- All Tier 2 benchmarks run sequentially through the folio actor — threading is not relevant to this design
 - hxFolio does not support history API — history benchmarks are rustFolio-only
-- redb's MVCC model means write transactions may block read transactions briefly; the mixed workload benchmark will surface this if it's a problem
-- `cargo bench` requires a `release`-profile Rust binary — the same binary used in production
+- GC pause tracking (`-verbose:gc`) requires the JVM to be launched by the harness, not via `fan` wrapper — harness must construct the JVM command directly
+- `cargo bench` requires a release-profile Rust binary — same binary used in production
+- If results change substantially after any code change, re-run the affected tier and note the commit hash in `BENCHMARKS_RESULTS.md`

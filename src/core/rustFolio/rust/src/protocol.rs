@@ -107,6 +107,7 @@ pub fn server_handshake<S: Read + Write>(stream: &mut S, expected_token: &[u8; T
 /// Perform the version + auth handshake (client side).
 /// Used only in tests to drive the server handshake without a live Fantom process.
 #[cfg(test)]
+#[allow(dead_code)]
 pub fn client_handshake<S: Read + Write>(stream: &mut S, token: &[u8; TOKEN_LEN]) -> Result<()> {
     // Send: 4 magic + 2 version + TOKEN_LEN token
     let mut req = Vec::with_capacity(6 + TOKEN_LEN);
@@ -134,6 +135,7 @@ pub fn client_handshake<S: Read + Write>(stream: &mut S, token: &[u8; TOKEN_LEN]
 /// A decoded request message.
 /// Used only in tests; the live server decodes directly in read_message.
 #[cfg(test)]
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Request {
     pub opcode:  u16,
