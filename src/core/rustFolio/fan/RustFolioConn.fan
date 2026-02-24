@@ -50,6 +50,7 @@ class RustFolioConn
   static const Int opHisWrite     := 0x0041
   static const Int opHisStat      := 0x0042
   static const Int opBackupCreate := 0x0050
+  static const Int opSpecUpdate   := 0x0060
 
   // Error wire codes (must match Rust error.rs)
   private static const Int errCodeUnknownRec        := 0x0001
@@ -347,6 +348,30 @@ class RustFolioConn
     RustFolioSerializer.writeStr(payload.out, destPath)
     sendRequest(opBackupCreate, payload)
     readResponse(opBackupCreate) // empty response; throws on error
+  }
+
+  **
+  ** SPEC_UPDATE — push the Xeto spec subtype map to the Rust process.
+  **
+  ** subtypeMap: parent_qname → list of all subtype qnames that are-a parent
+  ** (including the parent itself).
+  **
+  ** Request:  [u32 entry_count] ([str parent] [u32 subtype_count] [str subtype]*)* 
+  ** Response: empty (success) or error frame
+  **
+  Void specUpdate(Str:Str[] subtypeMap)
+  {
+    payload := Buf()
+    out     := payload.out
+    out.writeI4(subtypeMap.size)
+    subtypeMap.each |subtypes, parent|
+    {
+      RustFolioSerializer.writeStr(out, parent)
+      out.writeI4(subtypes.size)
+      subtypes.each |s| { RustFolioSerializer.writeStr(out, s) }
+    }
+    sendRequest(opSpecUpdate, payload)
+    readResponse(opSpecUpdate) // empty response; throws on error
   }
 
 //////////////////////////////////////////////////////////////////////////

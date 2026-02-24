@@ -146,6 +146,7 @@ previous run or a different version of the binary.
 | `0x0030–0x0032` | Metadata: CUR_VER, FLUSH_MODE, FLUSH |
 | `0x0040–0x0042` | History: HIS_READ, HIS_WRITE, HIS_STAT |
 | `0x0050` | Backup: BACKUP_CREATE |
+| `0x0060` | Schema: SPEC_UPDATE |
 
 ### 3.5 Type Serialization
 
@@ -233,6 +234,57 @@ non-matching records.
 The filter parser (`filter/parser.rs`) is a hand-written recursive-descent parser
 that handles the full Haystack filter grammar. The evaluator (`filter/eval.rs`)
 walks the AST against each `Record.merged` dict.
+
+### 5.1 Tag Presence Index
+
+`RecordCache` maintains a secondary index: `tag_index: HashMap<String, HashSet<String>>`
+mapping tag name → set of record ids that currently have that tag in their
+**merged** view (persistent + transient). This allows common filter patterns like
+`point and his` or `site and geoCity` to skip the full record scan entirely.
+
+**Query acceleration:** `query.rs` walks the top-level AND chain of every incoming
+filter looking for simple `Has(single_tag)` terms. If any are found, their index
+sets are intersected to produce a candidate set. The full filter is then evaluated
+only against candidates. A filter with no extractable `Has` terms (e.g., a
+comparison filter, or an `Or` at the root) falls back to a full scan — the correct
+conservative choice.
+
+**Index maintenance:** The index is updated on every `load`, `apply_persistent_commit`,
+and `apply_transient_commit`. For transient commits (e.g., `curVal` updates), the
+update uses a snapshot-diff of the merged tag-key set before and after the commit.
+In the common case where a transient commit only changes a value without adding or
+removing a tag key, the diff is empty and the index maintenance cost is zero.
+
+### 5.2 isSpec Filter Support
+
+`isSpec("ph::Point")` checks whether a record's `spec` tag (a Ref to a Xeto type
+name) is the named spec or any of its subtypes. For Dict records, `MNamespace.specOf`
+simply reads `rec["spec"]` as a Ref id — so `isSpec` reduces to a set membership
+check: is the record's spec Ref id in the set of all types that are-a `ph::Point`?
+
+**Spec hierarchy push (SPEC_UPDATE, 0x0060):** At folio open and after each
+reconnect, `RustFolio.syncSpec()` iterates all types in the Xeto namespace and
+builds a map: parent spec qname → set of all sub-spec qnames (including the parent
+itself). This map is sent to the Rust process via `SPEC_UPDATE`. The Rust evaluator
+then resolves `IsSpec(name)` in O(1): look up the record's `spec` Ref id in the
+`spec_subtypes[name]` set.
+
+**Lazy initialization:** The Xeto namespace is typically unavailable at folio
+open time (libs are loaded after the folio is opened). `syncSpec()` sends an empty
+map if the namespace is null. A lazy check in `doReadAll` and `doReadCount` triggers
+a one-time re-sync the first time either is called after the namespace becomes
+available.
+
+**Runtime lib changes:** If Xeto libs are added or removed at runtime, the Rust-side
+spec map goes stale until the next restart or reconnect. There is no public
+`FolioHooks` callback for namespace reload. The follow-up integration task is to
+contribute `onNamespaceModified(Namespace)` to `FolioHooks` upstream.
+
+**Why not filter rewriting (Option C):** The alternative — rewriting `isSpec` nodes
+to an `Or` of `Eq` comparisons before sending the filter to Rust — was rejected
+because `ph::Point` has 100–200 subtypes in a production ph library. An `Or` of
+200 `Eq` nodes would be slower than the current full scan and would bloat the
+filter string significantly.
 
 ---
 
@@ -603,18 +655,14 @@ Decisions are identified by the codes used in `PROGRESS.md`.
 | DEV-010 | Let IOErr propagate on writes | Retrying a write without knowing whether it already persisted risks double-committing. The phantom commit warning (Q3) gives operators the information they need to recover manually. |
 | DEV-011 | History key: biased ticks | XOR-biasing signed i64 ticks to u64 maps negative timestamps to the low end of u64, giving correct chronological ordering in redb's big-endian B-tree without any additional index. |
 | DEV-012 | Reconnect inline in folio actor | The folio actor is single-threaded; reconnect within an actor message causes subsequent messages to queue naturally. No explicit state machine, no locking, no reconnect thread. |
+| DEV-013 | Tag presence index in RecordCache | Secondary `HashMap<tag, HashSet<id>>` maintained against the merged view. Enables O(result_set) evaluation for Has-based filter leading terms by intersecting candidate sets before the full filter runs. Falls back to full scan for Or-rooted filters and non-Has leading terms. |
+| DEV-014 | isSpec via pushed spec hierarchy (SPEC_UPDATE) | Rust resolves isSpec in O(1) using a parent→subtypes map pushed from Fantom at open/reconnect. Rejected filter rewriting (Option C): ph::Point has 100–200 subtypes in production; an Or of 200 Eq nodes is worse than a full scan. |
 
 ---
 
 ## 16. Future Work
 
 The following improvements are planned but not yet implemented:
-
-**Incremental dis updates (O1):** `RustFolioDisMgr.updateAll()` reads all records
-from Rust and recomputes the full dis cache after every commit. For databases with
-thousands of records, this is O(n) per commit. The optimization is dirty-set
-tracking: after a commit, only the records that changed (and any records that
-reference them via disMacro) need to be recomputed.
 
 **Incremental history statistics (O3):** `HIS_STAT` currently returns a pre-computed
 stat row. `HIS_WRITE` updates the stat row in-place (a single metadata write per
@@ -628,6 +676,12 @@ prefix rename is currently skipped.
 
 **Socket authentication:** A shared-secret handshake in the protocol would be
 appropriate for deployments where per-process isolation is not guaranteed.
+
+**Namespace reload hook:** When Xeto libs are added or removed at runtime, the
+Rust-side spec subtype map (used for `isSpec` filter evaluation) goes stale until
+the next restart or reconnect. The correct fix is a `onNamespaceModified(Namespace)`
+callback contributed to `FolioHooks` upstream, allowing all Folio implementations
+to react to namespace changes. Until that hook exists, restart is the recovery path.
 
 **Performance benchmarks:** No formal throughput or latency comparison against
 hxFolio has been conducted. Baseline benchmarks at representative record counts

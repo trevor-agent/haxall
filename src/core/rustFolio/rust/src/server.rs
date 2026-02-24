@@ -155,6 +155,7 @@ impl Server {
             opcode::HIS_WRITE      => self.handle_his_write(payload, &mut pos),
             opcode::HIS_STAT       => self.handle_his_stat(payload, &mut pos),
             opcode::BACKUP_CREATE  => self.handle_backup_create(payload, &mut pos),
+            opcode::SPEC_UPDATE    => self.handle_spec_update(payload, &mut pos),
             _ => Err(FolioError::Protocol(format!("Unknown opcode: {:#06x}", op))),
         }
     }
@@ -387,6 +388,41 @@ impl Server {
         let dest_path     = std::path::Path::new(&dest_path_str);
 
         self.storage.backup_create(dest_path)?;
+        Ok(Vec::new())
+    }
+
+    // ── Spec handlers ────────────────────────────────────────────────────────
+
+    /// SPEC_UPDATE — receive the Xeto spec subtype map from Fantom.
+    ///
+    /// Request payload:
+    ///   [u32 entry_count]
+    ///   for each entry:
+    ///     [str parent_qname]
+    ///     [u32 subtype_count]
+    ///     for each subtype: [str subtype_qname]
+    ///
+    /// Response payload: empty (success) or error frame.
+    ///
+    /// Replaces the entire spec_subtypes map atomically. An entry_count of 0
+    /// clears the map (namespace not yet loaded on Fantom side).
+    fn handle_spec_update(&mut self, data: &[u8], pos: &mut usize) -> Result<Vec<u8>> {
+        use std::collections::HashSet;
+
+        let entry_count = protocol::read_u32(data, pos)? as usize;
+        let mut map = std::collections::HashMap::with_capacity(entry_count);
+
+        for _ in 0..entry_count {
+            let parent_qname   = protocol::read_str_from(data, pos)?;
+            let subtype_count  = protocol::read_u32(data, pos)? as usize;
+            let mut subtypes   = HashSet::with_capacity(subtype_count);
+            for _ in 0..subtype_count {
+                subtypes.insert(protocol::read_str_from(data, pos)?);
+            }
+            map.insert(parent_qname, subtypes);
+        }
+
+        self.cache.spec_subtypes = map;
         Ok(Vec::new())
     }
 

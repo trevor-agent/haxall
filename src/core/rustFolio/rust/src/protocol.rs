@@ -41,6 +41,7 @@ pub mod opcode {
     pub const HIS_WRITE:     u16 = 0x0041;
     pub const HIS_STAT:      u16 = 0x0042;
     pub const BACKUP_CREATE: u16 = 0x0050;
+    pub const SPEC_UPDATE:   u16 = 0x0060;
 }
 
 /// Perform the version handshake (server side).

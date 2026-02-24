@@ -68,13 +68,20 @@ pub struct RecordCache {
 
     /// Current persistent version (matches redb META "curVer")
     pub cur_ver: u64,
+
+    /// Xeto spec hierarchy: parent_qname → set of all spec qnames that are-a parent
+    /// (including the parent itself). Populated via SPEC_UPDATE (0x0060) RPC.
+    /// Used by the IsSpec filter evaluator to resolve spec inheritance without
+    /// requiring Xeto knowledge inside the Rust process.
+    pub spec_subtypes: HashMap<String, HashSet<String>>,
 }
 
 impl RecordCache {
     pub fn new(cur_ver: u64) -> Self {
         RecordCache {
-            by_id:     HashMap::new(),
-            tag_index: HashMap::new(),
+            by_id:         HashMap::new(),
+            tag_index:     HashMap::new(),
+            spec_subtypes: HashMap::new(),
             cur_ver,
         }
     }

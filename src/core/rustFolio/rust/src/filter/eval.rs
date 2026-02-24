@@ -30,8 +30,21 @@ fn match_filter(f: &Filter, rec: &Dict, cache: &RecordCache) -> bool {
         Filter::And(a, b) => match_filter(a, rec, cache) && match_filter(b, rec, cache),
         Filter::Or(a, b)  => match_filter(a, rec, cache) || match_filter(b, rec, cache),
 
-        // isSpec / isSymbol: requires Xeto schema knowledge — not supported, treated as false
-        Filter::IsSpec(_)   => false,
+        // isSpec: check if rec["spec"] is a subtype of the filter spec using the
+        // spec_subtypes map populated via SPEC_UPDATE. Returns false if the map is
+        // empty (ns not yet synced) or the spec is not in the hierarchy.
+        Filter::IsSpec(name) => {
+            let spec_id = match rec.get("spec") {
+                Some(Val::Ref(r)) => r.id.as_str(),
+                _ => return false,
+            };
+            match cache.spec_subtypes.get(name) {
+                Some(set) => set.contains(spec_id),
+                None      => false,
+            }
+        }
+
+        // isSymbol: symbol-literal filters are not used by folio queries; always false.
         Filter::IsSymbol(_) => false,
     }
 }
