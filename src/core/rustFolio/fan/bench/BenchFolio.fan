@@ -1,19 +1,18 @@
-**
-** BenchFolio.fan — rustFolio integration benchmark harness
-**
-** Usage:
-**   fan BenchFolio.fan [--backend rust|hx|both] [--recs N] [--iters N] [--warmup N]
-**
-** GC tracking (hxFolio only):
-**   Redirect stderr to capture -verbose:gc output. Run the JVM with:
-**     FAN_JAVA_OPTS="-verbose:gc" fan BenchFolio.fan --backend hx 2>gc.log
-**   Then parse gc.log to extract pause count, total pause time, and max pause.
-**   This explains p99 tail latency outliers observed in hxFolio results.
-**
-** Output:
-**   Markdown table printed to stdout.
-**
+// BenchFolio.fan — rustFolio integration benchmark harness
+//
+// Usage:
+//   fan BenchFolio.fan [--backend rust|hx|both] [--recs N] [--iters N] [--warmup N]
+//
+// GC tracking (hxFolio only):
+//   Redirect stderr to capture -verbose:gc output. Run the JVM with:
+//     FAN_JAVA_OPTS="-verbose:gc" fan BenchFolio.fan --backend hx 2>gc.log
+//   Then parse gc.log to extract pause count, total pause time, and max pause.
+//   This explains p99 tail latency outliers observed in hxFolio results.
+//
+// Output:
+//   Markdown table printed to stdout.
 
+using xeto
 using folio
 using hxFolio
 using rustFolio
@@ -57,7 +56,7 @@ class BenchFolio
         case "--recs":    recs    = args[++i].toInt
         case "--iters":   iters   = args[++i].toInt
         case "--warmup":  warmup  = args[++i].toInt
-        default:          Env.cur.err.printLine("Unknown arg: ${args[i]}")
+        default:          Env.cur.err.printLine("Unknown arg: " + args[i])
       }
       i++
     }
@@ -70,7 +69,9 @@ class BenchFolio
   {
     echo("# rustFolio Benchmark Results")
     echo("")
-    echo("> Date:   ${DateTime.now.toLocale("DD-Mon-YYYY hh:mm:ss")}")
+    // Avoid nested string literals inside ${} — Fantom does not allow them
+    Str dateStr := DateTime.now.toStr
+    echo("> Date:   " + dateStr)
     echo("> Recs:   ${recs}  |  Iters: ${iters}  |  Warmup: ${warmup}")
     echo("")
     if (backend == "rust" || backend == "both") runBackend("rust")
@@ -103,13 +104,19 @@ class BenchFolio
         {
           benchHisWrite(folio)
           benchHisRead(folio)
-          benchHisStat(folio)
         }
         echo("")
       }
       finally { folio.close }
     }
-    finally { try { dir.delete(true) } catch {} }
+    finally { try { deleteDir(dir) } catch {} }
+  }
+
+  ** Recursively delete a directory tree.
+  private static Void deleteDir(File f)
+  {
+    if (f.isDir) f.list.each |c| { deleteDir(c) }
+    f.delete
   }
 
   //
@@ -152,24 +159,24 @@ class BenchFolio
         "his":   Marker.val,
         "kind":  "Number",
         "point": Marker.val,
-        "unit":  Number.loadUnit("kW"),
+        "tz":    "UTC",
+        "unit":  "kW",
       ])))
       if (batch.size >= 100) { flushBatch(folio, batch); batch.clear }
     }
     if (!batch.isEmpty) { flushBatch(folio, batch); batch.clear }
 
     // Collect point ids for history benchmarks
-    folio.readAll("his", null).each |r| { hisIds.add(r.id) }
+    folio.readAllList(Filter("his"), null).each |r| { hisIds.add(r.id) }
 
-    // Seed 10k history items for first 10 points at 1-minute intervals
-    // Base: 2023-01-01 UTC; each point uses a non-overlapping range
+    // Seed 10k history items for first 10 points at 1-minute intervals.
+    // Base: 2023-01-01 UTC; each point uses a non-overlapping timestamp range.
     Int limit    := 10.min(hisIds.size)
     Int hisCount := 10_000
-    DateTime base := DateTime.make(2023, Month.jan, 1, 0, 0, 0, TimeZone.utc)
+    DateTime base := DateTime.make(2023, Month.jan, 1, 0, 0, 0, 0, TimeZone.utc)
 
     limit.times |pi|
     {
-      pt := folio.readById(hisIds[pi])
       HisItem[] items := HisItem[,]
       items.capacity = hisCount
       hisCount.times |ii|
@@ -178,7 +185,7 @@ class BenchFolio
         val := Number.make((ii % 100).toFloat + 0.5f, Number.loadUnit("kW"))
         items.add(HisItem.make(ts, val))
       }
-      folio.hisWrite(pt, items, null, null).get(60sec)
+      folio.his().write(hisIds[pi], items).get(60sec)
     }
 
     echo("  Seeded: ${allIds.size} records, ${limit} points x ${hisCount} history items")
@@ -187,7 +194,8 @@ class BenchFolio
 
   private Void flushBatch(Folio folio, Diff[] batch)
   {
-    folio.commitAll(batch, null).each |r| { allIds.add(r.id) }
+    // commitAll(Diff[]) returns Diff[]; use Diff.id to get the assigned record id
+    folio.commitAll(batch).each |d| { allIds.add(d.id) }
   }
 
   //
@@ -221,7 +229,7 @@ class BenchFolio
     echo("|---------------------------------------|---------|------------|----------|----------|----------|")
   }
 
-  private Void row(Str scenario, Str name, Int[] durs)
+  private Void row(Str scenario, Str bname, Int[] durs)
   {
     sorted := durs.dup.sort
     Int sum := 0
@@ -231,9 +239,15 @@ class BenchFolio
     Float p50 := pct(sorted, 0.50f).toFloat / 1_000f
     Float p95 := pct(sorted, 0.95f).toFloat / 1_000f
     Float p99 := pct(sorted, 0.99f).toFloat / 1_000f
+
+    // Extract to locals — Fantom does not allow nested string literals inside ${}
+    Str opsStr := opsSec.toLocale("0").padl(10)
+    Str p50Str := p50.toLocale("0.0").padl(8)
+    Str p95Str := p95.toLocale("0.0").padl(8)
+    Str p99Str := p99.toLocale("0.0").padl(8)
     Str sc := scenario.padr(37)
-    Str nb := name.padr(7)
-    echo("| ${sc} | ${nb} | ${opsSec.toLocale("0").padl(10)} | ${p50.toLocale("0.0").padl(8)} | ${p95.toLocale("0.0").padl(8)} | ${p99.toLocale("0.0").padl(8)} |")
+    Str nb := bname.padr(7)
+    echo("| ${sc} | ${nb} | ${opsStr} | ${p50Str} | ${p95Str} | ${p99Str} |")
   }
 
   private static Int pct(Int[] sorted, Float p)
@@ -246,7 +260,7 @@ class BenchFolio
   // --- Benchmark scenarios ---
   //
 
-  private Void benchReadById(Folio folio, Str name)
+  private Void benchReadById(Folio folio, Str bname)
   {
     if (allIds.isEmpty) return
     // High iteration count — this is the IPC floor measurement.
@@ -258,31 +272,31 @@ class BenchFolio
       folio.readById(allIds[ci[0] % allIds.size], false)
       ci[0] = ci[0] + 1
     }
-    row("readById (ipc floor)", name, durs)
+    row("readById (ipc floor)", bname, durs)
   }
 
-  private Void benchReadAll(Folio folio, Str name)
+  private Void benchReadAll(Folio folio, Str bname)
   {
-    [
-      ["readAll equip",           "equip"],
-      ["readAll equip+point+his", "equip and point and his"],
-      ["readAll no-match",        "ahu and chiller"],
-    ].each |pair|
-    {
-      Str label  := pair[0]
-      Str filter := pair[1]
-      durs := measure(iters) |->| { folio.readAll(filter, null) }
-      row(label, name, durs)
-    }
+    benchFilter(folio, bname, "readAll equip",           "equip")
+    benchFilter(folio, bname, "readAll equip+point+his", "equip and point and his")
+    benchFilter(folio, bname, "readAll no-match",        "ahu and chiller")
   }
 
-  private Void benchReadCount(Folio folio, Str name)
+  private Void benchFilter(Folio folio, Str bname, Str label, Str filterStr)
   {
-    durs := measure(iters * 2) |->| { folio.readCount("equip", null) }
-    row("readCount equip", name, durs)
+    f := Filter(filterStr)
+    durs := measure(iters) |->| { folio.readAllList(f, null) }
+    row(label, bname, durs)
   }
 
-  private Void benchCommit(Folio folio, Str name)
+  private Void benchReadCount(Folio folio, Str bname)
+  {
+    f := Filter("equip")
+    durs := measure(iters * 2) |->| { folio.readCount(f, null) }
+    row("readCount equip", bname, durs)
+  }
+
+  private Void benchCommit(Folio folio, Str bname)
   {
     [1, 10, 100].each |sz|
     {
@@ -300,19 +314,19 @@ class BenchFolio
           ])))
           ci[0] = ci[0] + 1
         }
-        folio.commitAll(b, null)
+        folio.commitAll(b)
       }
-      row("commitAll add batch=${sz}", name, durs)
+      Str label := "commitAll add batch=" + sz
+      row(label, bname, durs)
     }
   }
 
   private Void benchHisWrite(Folio folio)
   {
     if (hisIds.isEmpty) return
-    Dict pt := folio.readById(hisIds[0])
 
     // Use 2020 as base to avoid overlap with seeded 2023 data
-    DateTime base := DateTime.make(2020, Month.jan, 1, 0, 0, 0, TimeZone.utc)
+    DateTime base := DateTime.make(2020, Month.jan, 1, 0, 0, 0, 0, TimeZone.utc)
     Int[] callId  := [0]
 
     [100, 1_000, 10_000].each |n|
@@ -328,32 +342,29 @@ class BenchFolio
           val := Number.make((i % 100).toFloat, Number.loadUnit("kW"))
           items.add(HisItem.make(ts, val))
         }
-        folio.hisWrite(pt, items, null, null).get(30sec)
+        folio.his().write(hisIds[0], items).get(30sec)
         callId[0] = callId[0] + 1
       }
-      row("hisWrite ${n} items", "rust", durs)
+      Str label := "hisWrite " + n + " items"
+      row(label, "rust", durs)
     }
   }
 
   private Void benchHisRead(Folio folio)
   {
     if (hisIds.isEmpty) return
-    Dict pt := folio.readById(hisIds[0])
 
     // Span covers the 10k items seeded for hisIds[0] (base 2023-01-01, 1-min intervals)
-    DateTime start := DateTime.make(2023, Month.jan, 1, 0, 0, 0, TimeZone.utc)
+    DateTime start := DateTime.make(2023, Month.jan, 1, 0, 0, 0, 0, TimeZone.utc)
     DateTime end   := start + 1min * 10_001  // just past the last seeded item
+    Span span := Span.makeAbs(start, end)
 
     Int nIters := iters.min(200)
-    durs := measure(nIters) |->| { folio.hisRead(pt, Span.make(start, end), null) }
+    durs := measure(nIters) |->|
+    {
+      HisItem[] result := HisItem[,]
+      folio.his().read(hisIds[0], span, null) |item| { result.add(item) }
+    }
     row("hisRead full (10k items)", "rust", durs)
-  }
-
-  private Void benchHisStat(Folio folio)
-  {
-    if (hisIds.isEmpty) return
-    Dict pt := folio.readById(hisIds[0])
-    durs := measure(iters * 5) |->| { folio.hisStat(pt, null) }
-    row("hisStat", "rust", durs)
   }
 }
