@@ -140,6 +140,15 @@ const class RustFolio : Folio
   **
   private const AtomicBool specSyncedRef := AtomicBool(false)
 
+  **
+  ** The Namespace object used in the last successful syncSpec() call.
+  ** HxLibs.doUpdate() creates a NEW Namespace instance on every lib add/remove
+  ** (see HxLibs.fan:282), so object identity comparison detects namespace
+  ** changes in O(1) with zero allocation on the hot path.
+  ** Reset to null on reconnect alongside specSyncedRef.
+  **
+  private const AtomicRef lastSyncedNsRef := AtomicRef(null)
+
   private RustFolioConn? conn() { (connRef.val as Unsafe)?.val }
   private RustFolioProcess? rustProcess() { (processRef.val as Unsafe)?.val }
 
@@ -351,7 +360,8 @@ const class RustFolio : Folio
     hisImpl.clearStatsCache
 
     // 9. Sync spec hierarchy — namespace is available by reconnect time
-    specSyncedRef.val = false
+    specSyncedRef.val   = false
+    lastSyncedNsRef.val = null
     syncSpec
   }
 
@@ -393,7 +403,8 @@ const class RustFolio : Folio
     }
 
     c.specUpdate(subtypeMap)
-    specSyncedRef.val = ns != null
+    specSyncedRef.val   = ns != null
+    lastSyncedNsRef.val = ns          // capture identity for change detection
   }
 
   private static Void syncSpecAdd([Str:Str[]] map, Str parent, Str subtype)
@@ -782,11 +793,21 @@ const class RustFolio : Folio
     // Safe to call here: HxLibs.doUpdate() sets nsRef.val BEFORE calling
     // folio.commitAll(), so hooks.ns(false) returns immediately (no recursive
     // lib update). We skip transient-only commits (curVal etc.) — no namespace
-    // change can come from those. Guarded by specSyncedRef so this check costs
-    // a single AtomicBool read on every subsequent persistent commit.
-    if (!hasTransient && !specSyncedRef.val)
+    // change can come from those. Guarded by specSyncedRef so the common
+    // path costs one AtomicBool read + one AtomicRef read (both O(1), no alloc).
+    // The second condition detects runtime lib adds/removes: HxLibs.doUpdate()
+    // creates a NEW Namespace object and stores it in nsRef BEFORE calling
+    // folio.commitAll(), so hooks.ns(false) already returns the new namespace
+    // when this code runs.  Object identity mismatch → re-sync the map.
+    if (!hasTransient)
     {
-      try { if (hooks.ns(false) != null) syncSpec } catch (UnsupportedErr e) {}
+      try
+      {
+        currentNs := hooks.ns(false)
+        if (currentNs != null && (!specSyncedRef.val || currentNs !== lastSyncedNsRef.val))
+          syncSpec
+      }
+      catch (UnsupportedErr e) {}
     }
 
     return FolioFuture.makeSync(CommitFolioRes(completed))
