@@ -4,13 +4,21 @@
 //   fan BenchFolio.fan [--backend rust|hx|both] [--recs N] [--iters N] [--warmup N]
 //
 // GC tracking (hxFolio only):
-//   Redirect stderr to capture -verbose:gc output. Run the JVM with:
+//   Run with FAN_JAVA_OPTS="-verbose:gc" and redirect stderr:
 //     FAN_JAVA_OPTS="-verbose:gc" fan BenchFolio.fan --backend hx 2>gc.log
-//   Then parse gc.log to extract pause count, total pause time, and max pause.
+//   Parse gc.log to extract pause count, total pause time, and max pause.
 //   This explains p99 tail latency outliers observed in hxFolio results.
 //
-// Output:
-//   Markdown table printed to stdout.
+// Output: Markdown table printed to stdout.
+//
+// API notes (verified against folio pod source):
+//   - readAllList(Filter, Dict?)      → Dict[]   (use instead of readAll)
+//   - readCount(Filter, Dict?)        → Int
+//   - commitAll(Diff[])               → Diff[]   (no opts param)
+//   - Diff.makeAdd(Dict)              → Diff     (id auto-generated)
+//   - folio.his().write(Ref, HisItem[], Dict?) → FolioFuture
+//   - folio.his().read(Ref, Span?, Dict?, |HisItem|) → Void (callback)
+//   - Span.makeAbs(DateTime, DateTime) — NOT Span.make
 
 using xeto
 using folio
@@ -69,8 +77,7 @@ class BenchFolio
   {
     echo("# rustFolio Benchmark Results")
     echo("")
-    // Avoid nested string literals inside ${} — Fantom does not allow them
-    Str dateStr := DateTime.now.toStr
+    Str dateStr := DateTime.now.toLocale("DD-Mon-YYYY hh:mm:ss")
     echo("> Date:   " + dateStr)
     echo("> Recs:   ${recs}  |  Iters: ${iters}  |  Warmup: ${warmup}")
     echo("")
@@ -93,7 +100,7 @@ class BenchFolio
       {
         echo("## Backend: ${name}")
         echo("")
-        seed(folio)
+        seed(folio, name)
 
         printHeader
         benchReadById(folio, name)
@@ -122,7 +129,7 @@ class BenchFolio
   //
   // --- Seeding ---
   //
-  private Void seed(Folio folio)
+  private Void seed(Folio folio, Str name)
   {
     nSites  := (recs / 10).max(1)
     nEquips := (recs / 4).max(1)
@@ -159,42 +166,48 @@ class BenchFolio
         "his":   Marker.val,
         "kind":  "Number",
         "point": Marker.val,
-        "tz":    "UTC",
-        "unit":  "kW",
+        "unit":  Number.loadUnit("kW"),
       ])))
       if (batch.size >= 100) { flushBatch(folio, batch); batch.clear }
     }
     if (!batch.isEmpty) { flushBatch(folio, batch); batch.clear }
 
-    // Collect point ids for history benchmarks
+    // Collect point ids for history benchmarks (and seeding)
     folio.readAllList(Filter("his"), null).each |r| { hisIds.add(r.id) }
 
-    // Seed 10k history items for first 10 points at 1-minute intervals.
-    // Base: 2023-01-01 UTC; each point uses a non-overlapping timestamp range.
-    Int limit    := 10.min(hisIds.size)
-    Int hisCount := 10_000
-    DateTime base := DateTime.make(2023, Month.jan, 1, 0, 0, 0, 0, TimeZone.utc)
-
-    limit.times |pi|
+    // Seed history: rustFolio only — hxFolio throws UnsupportedErr on folio.his()
+    Int limit := 0
+    if (name == "rust")
     {
-      HisItem[] items := HisItem[,]
-      items.capacity = hisCount
-      hisCount.times |ii|
-      {
-        ts  := base + 1min * (pi * hisCount + ii)
-        val := Number.make((ii % 100).toFloat + 0.5f, Number.loadUnit("kW"))
-        items.add(HisItem.make(ts, val))
-      }
-      folio.his().write(hisIds[pi], items).get(60sec)
-    }
+      Int hisCount := 10_000
+      limit = 10.min(hisIds.size)
+      DateTime base := DateTime.make(2023, Month.jan, 1, 0, 0, 0, TimeZone.utc)
 
-    echo("  Seeded: ${allIds.size} records, ${limit} points x ${hisCount} history items")
+      limit.times |pi|
+      {
+        pt := folio.readById(hisIds[pi])
+        HisItem[] items := HisItem[,]
+        items.capacity = hisCount
+        hisCount.times |ii|
+        {
+          ts  := base + 1min * (pi * hisCount + ii)
+          val := Number.make((ii % 100).toFloat + 0.5f, Number.loadUnit("kW"))
+          items.add(HisItem.make(ts, val))
+        }
+        folio.his().write(pt.id, items, null).get(60sec)
+      }
+
+      echo("  Seeded: ${allIds.size} records, ${limit} points x ${hisCount} history items")
+    }
+    else
+    {
+      echo("  Seeded: ${allIds.size} records (his seeding skipped for ${name} backend)")
+    }
     echo("")
   }
 
   private Void flushBatch(Folio folio, Diff[] batch)
   {
-    // commitAll(Diff[]) returns Diff[]; use Diff.id to get the assigned record id
     folio.commitAll(batch).each |d| { allIds.add(d.id) }
   }
 
@@ -203,9 +216,8 @@ class BenchFolio
   //
 
   **
-  ** Run 'n' timed iterations preceded by warmup iterations (untimed).
-  ** Warmup count is capped at min(warmup, n/2) so it never exceeds
-  ** the measurement set — critical for low-iteration scenarios.
+  ** Run 'n' timed iterations preceded by warmup (untimed).
+  ** Warmup is capped at min(warmup, n/2) — critical for small iteration counts.
   ** Returns Int[] of per-iteration elapsed nanoseconds.
   **
   private Int[] measure(Int n, |->| op)
@@ -240,7 +252,7 @@ class BenchFolio
     Float p95 := pct(sorted, 0.95f).toFloat / 1_000f
     Float p99 := pct(sorted, 0.99f).toFloat / 1_000f
 
-    // Extract to locals — Fantom does not allow nested string literals inside ${}
+    // Extract to locals — Fantom disallows nested string literals inside ${}
     Str opsStr := opsSec.toLocale("0").padl(10)
     Str p50Str := p50.toLocale("0.0").padl(8)
     Str p95Str := p95.toLocale("0.0").padl(8)
@@ -284,14 +296,14 @@ class BenchFolio
 
   private Void benchFilter(Folio folio, Str bname, Str label, Str filterStr)
   {
-    f := Filter(filterStr)
+    Filter f := Filter(filterStr)
     durs := measure(iters) |->| { folio.readAllList(f, null) }
     row(label, bname, durs)
   }
 
   private Void benchReadCount(Folio folio, Str bname)
   {
-    f := Filter("equip")
+    Filter f := Filter("equip")
     durs := measure(iters * 2) |->| { folio.readCount(f, null) }
     row("readCount equip", bname, durs)
   }
@@ -324,9 +336,10 @@ class BenchFolio
   private Void benchHisWrite(Folio folio)
   {
     if (hisIds.isEmpty) return
+    Dict pt := folio.readById(hisIds[0])
 
-    // Use 2020 as base to avoid overlap with seeded 2023 data
-    DateTime base := DateTime.make(2020, Month.jan, 1, 0, 0, 0, 0, TimeZone.utc)
+    // Use 2020 base to avoid overlap with seeded 2023 data
+    DateTime base := DateTime.make(2020, Month.jan, 1, 0, 0, 0, TimeZone.utc)
     Int[] callId  := [0]
 
     [100, 1_000, 10_000].each |n|
@@ -342,7 +355,7 @@ class BenchFolio
           val := Number.make((i % 100).toFloat, Number.loadUnit("kW"))
           items.add(HisItem.make(ts, val))
         }
-        folio.his().write(hisIds[0], items).get(30sec)
+        folio.his().write(pt.id, items, null).get(30sec)
         callId[0] = callId[0] + 1
       }
       Str label := "hisWrite " + n + " items"
@@ -353,17 +366,17 @@ class BenchFolio
   private Void benchHisRead(Folio folio)
   {
     if (hisIds.isEmpty) return
+    Dict pt := folio.readById(hisIds[0])
 
-    // Span covers the 10k items seeded for hisIds[0] (base 2023-01-01, 1-min intervals)
-    DateTime start := DateTime.make(2023, Month.jan, 1, 0, 0, 0, 0, TimeZone.utc)
-    DateTime end   := start + 1min * 10_001  // just past the last seeded item
-    Span span := Span.makeAbs(start, end)
+    // Span covers seeded 10k items for hisIds[0] (base 2023-01-01, 1-min intervals)
+    DateTime start := DateTime.make(2023, Month.jan, 1, 0, 0, 0, TimeZone.utc)
+    DateTime end   := start + 1min * 10_001
 
     Int nIters := iters.min(200)
     durs := measure(nIters) |->|
     {
       HisItem[] result := HisItem[,]
-      folio.his().read(hisIds[0], span, null) |item| { result.add(item) }
+      folio.his().read(pt.id, Span.makeAbs(start, end), null) |item| { result.add(item) }
     }
     row("hisRead full (10k items)", "rust", durs)
   }
