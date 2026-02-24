@@ -65,6 +65,9 @@ const class RustFolio : Folio
     // Backup implementation (see RustFolioBackup)
     backupImpl = RustFolioBackup(this)
 
+    // File storage — local filesystem delegation via LocalFolioFile
+    fileImpl = LocalFolioFile(this)
+
     // Display string manager — compute initial dis cache on open so that
     // post-reopen verifyDictDis checks work without an explicit syncDis call.
     disMgr = RustFolioDisMgr()
@@ -89,6 +92,9 @@ const class RustFolio : Folio
 
   ** Backup implementation
   private const RustFolioBackup backupImpl
+
+  ** File storage — local filesystem via LocalFolioFile
+  private const LocalFolioFile fileImpl
 
   ** Display string manager (Fantom-side cache)
   private const RustFolioDisMgr disMgr
@@ -161,11 +167,8 @@ const class RustFolio : Folio
   ** History — backed by redb via RustFolioHis.
   override FolioHis his() { hisImpl }
 
-  ** File storage — not yet implemented.
-  override FolioFile file()
-  {
-    throw UnsupportedErr("RustFolio.file not implemented")
-  }
+  ** File storage — local filesystem via LocalFolioFile.
+  override FolioFile file() { fileImpl }
 
 //////////////////////////////////////////////////////////////////////////
 // Lifecycle

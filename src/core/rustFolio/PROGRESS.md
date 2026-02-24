@@ -82,8 +82,8 @@ the rest of haxall.
 |-------|--------|-------------|
 | P1 - History persistence | ✅ 2026-02-23 | redb HISTORY + HISTORY_META tables; HIS_READ/HIS_WRITE/HIS_STAT RPCs. Gate: 10200 verifies ALL GREEN. |
 | P2 - Runtime integration | ✅ 2026-02-23 | folio.props backend selection in HxdBoot; hx init + hx run verified; API responding; 6 records persisted across restart. |
-| P3 - Backup | ✅ complete | FolioBackup impl — consistent redb snapshot via logical table copy. |
-| P4 - File storage | 🔲 pending | FolioFile — blob table in Rust or Fantom-side disk delegation. |
+| P3 - Backup | ✅ 2026-02-23 | FolioBackup impl — consistent redb snapshot via logical table copy. BACKUP_CREATE (0x0050) RPC. Gate: ALL GREEN. |
+| P4 - File storage | 🔄 in-progress | FolioFile — Fantom-side disk delegation via LocalFolioFile. |
 | P5 - Hardening | 🔲 pending | Incremental dis updates (O(n)/commit → dirty-set tracking). Reconnect-on-failure. Prefix rename. Benchmarking vs hxFolio. |
 
 ### P1 Design — History Persistence
@@ -149,6 +149,20 @@ fan hx run myproject
 - `RustFolio.fan`: Add `backupImpl` field, initialize in constructor, `backup()` returns it.
 
 **Gate impact:** No new tests. Existing 10200 verifies must remain ALL GREEN after build.
+
+### P4 Design — File Storage
+
+**Problem:** `RustFolio.file()` throws `UnsupportedErr`. File storage is used by production runtimes to attach binary blobs (documents, images, exports) to records.
+
+**Approach:** Delegate entirely to `LocalFolioFile`, which already exists in the `folio` pod. `LocalFolioFile` is a `@NoDoc` public class that stores blobs on the local filesystem in `{folio.dir}/../files/`, hashed into 1024 subdirectory buckets. It implements the full `FolioFile` interface including `get()` (spec validation via xeto), `delete()`, `withIn()`, `withOut()`, and async `fileSize` tag commits back to folio.
+
+**Why no Rust involvement:** File blobs are large, variable-size binary data — the wrong workload for a record-oriented B-tree. The existing local filesystem implementation is the correct solution at this scale. A Rust blob table would add complexity with no benefit.
+
+**Changes:**
+- `RustFolio.fan`: Add `fileImpl` field of type `LocalFolioFile`, initialize in constructor, `file()` returns it.
+- No new Rust code. No new Fantom files. No protocol changes.
+
+**Gate impact:** No new tests. Existing verifies must remain ALL GREEN.
 
 ## Build Notes
 

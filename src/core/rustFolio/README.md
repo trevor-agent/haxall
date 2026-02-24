@@ -19,10 +19,12 @@ The architecture is a **two-process model**:
 │    ├─ RustFolioProcess  ──spawn──►  │  ┌─────────────────────────────┐
 │    ├─ RustFolioConn  ────TCP───►    │  │  rust-folio (native binary) │
 │    ├─ RustFolioHis                  │  │                             │
-│    └─ RustFolioDisMgr (cache)       │  │  redb B-tree database       │
-│                                     │  │  Filter eval (native)       │
-│  RustFolioTestImpl ◄── testFolio ─  │  │  History storage (redb)     │
-└─────────────────────────────────────┘  └─────────────────────────────┘
+│    ├─ RustFolioBackup (zip)         │  │  redb B-tree database       │
+│    ├─ LocalFolioFile (disk)         │  │  Filter eval (native)       │
+│    └─ RustFolioDisMgr (cache)       │  │  History + Backup (redb)    │
+│                                     │  │                             │
+│  RustFolioTestImpl ◄── testFolio ─  │  └─────────────────────────────┘
+└─────────────────────────────────────┘
 ```
 
 The Fantom pod manages lifecycle, watches, passwords, and display strings.
@@ -38,8 +40,9 @@ rustFolio/
 ├── README.md               ← this file
 ├── PROGRESS.md             ← milestone log and architectural deviations
 ├── build.fan               ← Fantom pod build script
-├── fan/                    ← Fantom source (8 files)
+├── fan/                    ← Fantom source (9 files)
 │   ├── RustFolio.fan           main Folio subclass
+│   ├── RustFolioBackup.fan     FolioBackup impl (redb snapshot + zip)
 │   ├── RustFolioConn.fan       TCP binary protocol client
 │   ├── RustFolioDisMgr.fan     disMacro evaluation + Ref.disVal cache
 │   ├── RustFolioHis.fan        history implementation (backed by redb)
@@ -86,7 +89,7 @@ Communication is a custom **binary wire format** over a TCP loopback socket.
 
 Opcodes: `CLOSE`, `SYNC`, `CUR_VER`, `FLUSH_MODE`, `FLUSH`, `READ_BY_ID`,
 `READ_BY_IDS`, `READ_ALL`, `READ_COUNT`, `COMMIT_ALL`, `HIS_READ`,
-`HIS_WRITE`, `HIS_STAT`.
+`HIS_WRITE`, `HIS_STAT`, `BACKUP_CREATE`.
 
 ### Ref.dis enrichment
 
@@ -170,10 +173,13 @@ Omitting `folio.props` (or setting `backend=hxFolio`) falls back to the default.
 
 ## Known Limitations
 
-### Backup and file storage unsupported
+### File storage uses local filesystem
 
-`folio.backup()` and `folio.file()` throw `UnsupportedErr`. Neither is
-exercised by the testFolio gate, but both are used by production runtimes.
+`folio.file()` delegates to `LocalFolioFile` — the same on-disk bucket
+implementation used by `hxFolio`. Files are stored under `{dir}/../files/`,
+hashed across 1024 subdirectory buckets. This is correct for single-node
+deployments. A cloud or distributed blob store would require a different
+`FolioFile` implementation.
 
 ### Single-connection model
 
@@ -215,6 +221,30 @@ maps signed i64 to u64 so that big-endian byte order yields natural chronologica
 ordering. Stats (size, first, last) are cached in `HISTORY_META` and updated
 atomically on every write.
 
+### Backup via logical redb copy
+
+`RustFolioBackup.create()` sends a `BACKUP_CREATE (0x0050)` RPC with a temp
+file path. Rust opens a read transaction (pinning the MVCC snapshot), then
+iterates RECORDS, META, HISTORY, and HISTORY_META tables and writes every
+key-value pair into a new redb database at the temp path. Fantom zips the
+snapshot into `{name}-YYMMDD-hhmmss.zip` in `{dir}/../backup/`, matching
+hxFolio's path-prefix convention (`{name}-YYMMDD-hhmmss/db/db.redb`), then
+deletes the temp file. The operation runs in a background actor and returns a
+`FolioFuture`.
+
+A logical copy (read transaction + new database write) is used instead of a
+raw file copy because `std::fs::copy` on a live redb file risks partially-written
+pages during a concurrent commit. The read transaction guarantees consistency.
+
+### File storage via LocalFolioFile
+
+`RustFolio.file()` returns a `LocalFolioFile` instance. Files are stored on the
+local filesystem under `{dir}/../files/`, hashed into 1024 subdirectory buckets
+(`b0/` through `b1023/`). `LocalFolioFile` handles the full `FolioFile` lifecycle
+including spec validation (via the xeto namespace), `withIn`/`withOut` semantics,
+and async `fileSize` tag commits back to folio. No Rust involvement — binary blobs
+are the wrong workload for a record-oriented B-tree.
+
 ### Fantom-side dis propagation
 
 Ref.disVal is set by `RustFolioDisMgr` rather than by the Rust process because
@@ -226,8 +256,6 @@ already available post-read.
 
 ## Future Improvements
 
-- **Backup support** — `FolioBackup` via redb's native snapshot API.
-- **File storage** — `FolioFile` via a Rust-side blob table or Fantom-side disk delegation.
 - **Incremental dis updates** — reduce O(n)/commit cost with dirty-set tracking.
 - **Reconnect-on-failure** — automatic reconnect in `RustFolioConn` after unexpected disconnect.
 - **Prefix rename** — atomic id rewrite across all records in redb.
