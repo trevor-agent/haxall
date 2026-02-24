@@ -134,21 +134,36 @@ impl Server {
 
             let result = self.dispatch(op, &payload);
 
-            match result {
-                Ok(response_payload) => {
-                    if let Err(e) = protocol::write_response(stream, op, &response_payload) {
-                        tracing::error!(err = %e, "write_response failed");
-                        break;
+            // dispatch returns Vec<Vec<u8>>: one payload per response frame.
+            // Most handlers return a single frame; handle_read_all may return many.
+            let write_ok = match result {
+                Ok(payloads) => {
+                    let mut ok = true;
+                    for p in payloads {
+                        if let Err(e) = protocol::write_response(stream, op, &p) {
+                            tracing::error!(err = %e, "write_response failed");
+                            ok = false;
+                            break;
+                        }
                     }
+                    ok
                 }
                 Err(err) => {
                     tracing::warn!(op = op, err = %err, "request error");
-                    if let Err(e) = protocol::write_error(stream, op, &err) {
-                        tracing::error!(err = %e, "write_error failed");
-                        break;
+                    // Write the error frame to the client.  Only close the
+                    // connection if the write itself fails (I/O error), not
+                    // because the handler returned a logical error — that is
+                    // normal protocol behaviour (e.g. ConcurrentChangeErr).
+                    match protocol::write_error(stream, op, &err) {
+                        Ok(()) => true,
+                        Err(e) => {
+                            tracing::error!(err = %e, "write_error failed");
+                            false
+                        }
                     }
                 }
-            }
+            };
+            if !write_ok { break; }
 
             if op == opcode::CLOSE {
                 tracing::info!("close acknowledged, exiting");
@@ -158,24 +173,26 @@ impl Server {
         Ok(())
     }
 
-    fn dispatch(&mut self, op: u16, payload: &[u8]) -> Result<Vec<u8>> {
+    fn dispatch(&mut self, op: u16, payload: &[u8]) -> Result<Vec<Vec<u8>>> {
         let mut pos = 0usize;
+        // Most handlers return a single frame; READ_ALL may return many.
+        // Single-frame handlers are wrapped with `.map(|b| vec![b])`.
         match op {
-            opcode::CLOSE       => self.handle_close(),
-            opcode::SYNC        => self.handle_sync(),
-            opcode::CUR_VER     => self.handle_cur_ver(),
-            opcode::FLUSH_MODE  => self.handle_flush_mode(payload, &mut pos),
-            opcode::FLUSH       => self.handle_flush(),
-            opcode::READ_BY_ID  => self.handle_read_by_id(payload, &mut pos),
-            opcode::READ_BY_IDS  => self.handle_read_by_ids(payload, &mut pos),
-            opcode::READ_ALL     => self.handle_read_all(payload, &mut pos),
-            opcode::READ_COUNT   => self.handle_read_count(payload, &mut pos),
-            opcode::COMMIT_ALL   => self.handle_commit_all(payload, &mut pos),
-            opcode::HIS_READ       => self.handle_his_read(payload, &mut pos),
-            opcode::HIS_WRITE      => self.handle_his_write(payload, &mut pos),
-            opcode::HIS_STAT       => self.handle_his_stat(payload, &mut pos),
-            opcode::BACKUP_CREATE  => self.handle_backup_create(payload, &mut pos),
-            opcode::SPEC_UPDATE    => self.handle_spec_update(payload, &mut pos),
+            opcode::CLOSE         => self.handle_close().map(|b| vec![b]),
+            opcode::SYNC          => self.handle_sync().map(|b| vec![b]),
+            opcode::CUR_VER       => self.handle_cur_ver().map(|b| vec![b]),
+            opcode::FLUSH_MODE    => self.handle_flush_mode(payload, &mut pos).map(|b| vec![b]),
+            opcode::FLUSH         => self.handle_flush().map(|b| vec![b]),
+            opcode::READ_BY_ID    => self.handle_read_by_id(payload, &mut pos).map(|b| vec![b]),
+            opcode::READ_BY_IDS   => self.handle_read_by_ids(payload, &mut pos).map(|b| vec![b]),
+            opcode::READ_ALL      => self.handle_read_all(payload, &mut pos),
+            opcode::READ_COUNT    => self.handle_read_count(payload, &mut pos).map(|b| vec![b]),
+            opcode::COMMIT_ALL    => self.handle_commit_all(payload, &mut pos).map(|b| vec![b]),
+            opcode::HIS_READ      => self.handle_his_read(payload, &mut pos).map(|b| vec![b]),
+            opcode::HIS_WRITE     => self.handle_his_write(payload, &mut pos).map(|b| vec![b]),
+            opcode::HIS_STAT      => self.handle_his_stat(payload, &mut pos).map(|b| vec![b]),
+            opcode::BACKUP_CREATE => self.handle_backup_create(payload, &mut pos).map(|b| vec![b]),
+            opcode::SPEC_UPDATE   => self.handle_spec_update(payload, &mut pos).map(|b| vec![b]),
             _ => Err(FolioError::Protocol(format!("Unknown opcode: {:#06x}", op))),
         }
     }
@@ -280,7 +297,22 @@ impl Server {
         Ok(buf)
     }
 
-    fn handle_read_all(&self, data: &[u8], pos: &mut usize) -> Result<Vec<u8>> {
+    /// Maximum records per READ_ALL response frame.
+    /// At ~2 KB average record size this yields ~2 MB per chunk — well within
+    /// the 64 MB per-frame cap while keeping frame count low for typical data sets.
+    const CHUNK_SIZE: usize = 1000;
+
+    /// READ_ALL — return all records matching the filter.
+    ///
+    /// The query snapshot is atomic: all records are collected from RecordCache
+    /// in one pass before any serialization begins.  Chunking only affects how
+    /// the serialized bytes are split across response frames — there is no
+    /// TOCTOU risk between chunks.
+    ///
+    /// Response frame format: [u8 has_more][u32 count]{dict * count}
+    ///   has_more = 0x01 → more frames follow for this request
+    ///   has_more = 0x00 → this is the final (or only) frame
+    fn handle_read_all(&self, data: &[u8], pos: &mut usize) -> Result<Vec<Vec<u8>>> {
         if self.closed { return Err(FolioError::Shutdown); }
         let filter_str = protocol::read_str_from(data, pos)?;
         let opts_dict  = read_dict(data, pos)?;
@@ -289,13 +321,29 @@ impl Server {
         let opts = QueryOpts::from_dict(&opts_dict);
         let recs = query::read_all(&f, &opts, &self.cache);
 
-        let mut buf = Vec::new();
-        protocol::write_u32(&mut buf, recs.len() as u32);
-        for rec in &recs {
-            let enriched = self.enrich_id_dis(rec);
-            write_dict(&mut buf, &enriched);
+        // Empty result: single final frame with has_more=0, count=0.
+        if recs.is_empty() {
+            let mut buf = Vec::with_capacity(5);
+            buf.push(0x00u8);
+            protocol::write_u32(&mut buf, 0);
+            return Ok(vec![buf]);
         }
-        Ok(buf)
+
+        let chunks: Vec<&[Dict]> = recs.chunks(Self::CHUNK_SIZE).collect();
+        let last_idx = chunks.len() - 1;
+        let mut payloads = Vec::with_capacity(chunks.len());
+
+        for (i, chunk) in chunks.iter().enumerate() {
+            let mut buf = Vec::new();
+            buf.push(if i < last_idx { 0x01u8 } else { 0x00u8 }); // has_more
+            protocol::write_u32(&mut buf, chunk.len() as u32);
+            for rec in *chunk {
+                let enriched = self.enrich_id_dis(rec);
+                write_dict(&mut buf, &enriched);
+            }
+            payloads.push(buf);
+        }
+        Ok(payloads)
     }
 
     fn handle_read_count(&self, data: &[u8], pos: &mut usize) -> Result<Vec<u8>> {

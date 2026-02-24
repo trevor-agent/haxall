@@ -195,11 +195,19 @@ class RustFolioConn
     RustFolioSerializer.writeStr(payload.out, filter.toStr)
     RustFolioSerializer.writeDict(payload.out, opts ?: Etc.emptyDict)
     sendRequest(opReadAll, payload)
-    resp  := readResponse(opReadAll)
-    in    := resp.in
-    count := in.readU4
+    // READ_ALL response format: [u8 has_more][u32 count]{dict*}
+    //   has_more=0x01 → more frames follow; has_more=0x00 → final frame.
+    // Loop until the server signals the last chunk.
     result := Dict[,]
-    count.times { result.add(RustFolioSerializer.readDict(in)) }
+    while (true)
+    {
+      resp    := readResponse(opReadAll)
+      in      := resp.in
+      hasMore := in.read    // 0x01 = more chunks, 0x00 = final
+      count   := in.readU4
+      count.times { result.add(RustFolioSerializer.readDict(in)) }
+      if (hasMore == 0x00) break
+    }
     return result
   }
 
