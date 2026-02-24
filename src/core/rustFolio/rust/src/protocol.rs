@@ -263,7 +263,7 @@ pub fn read_u64(data: &[u8], pos: &mut usize) -> Result<u64> {
     if *pos + 8 > data.len() {
         return Err(FolioError::Protocol("Unexpected end of data (u64)".into()));
     }
-    let v = u64::from_be_bytes(data[*pos..*pos+8].try_into().unwrap());
+    let v = u64::from_be_bytes(data[*pos..*pos+8].try_into().expect("8-byte slice guaranteed by bounds check above"));
     *pos += 8;
     Ok(v)
 }
@@ -272,7 +272,7 @@ pub fn read_i64(data: &[u8], pos: &mut usize) -> Result<i64> {
     if *pos + 8 > data.len() {
         return Err(FolioError::Protocol("Unexpected end of data (i64)".into()));
     }
-    let v = i64::from_be_bytes(data[*pos..*pos+8].try_into().unwrap());
+    let v = i64::from_be_bytes(data[*pos..*pos+8].try_into().expect("8-byte slice guaranteed by bounds check above"));
     *pos += 8;
     Ok(v)
 }
@@ -281,7 +281,7 @@ pub fn read_f64(data: &[u8], pos: &mut usize) -> Result<f64> {
     if *pos + 8 > data.len() {
         return Err(FolioError::Protocol("Unexpected end of data (f64)".into()));
     }
-    let bits = u64::from_be_bytes(data[*pos..*pos+8].try_into().unwrap());
+    let bits = u64::from_be_bytes(data[*pos..*pos+8].try_into().expect("8-byte slice guaranteed by bounds check above"));
     *pos += 8;
     Ok(f64::from_bits(bits))
 }

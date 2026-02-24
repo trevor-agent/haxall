@@ -81,7 +81,7 @@ fn encode_ticks(ticks: i64) -> [u8; 8] {
 }
 
 fn decode_ticks(b: &[u8]) -> i64 {
-    let biased = u64::from_be_bytes(b[..8].try_into().unwrap());
+    let biased = u64::from_be_bytes(b[..8].try_into().expect("caller guarantees 8-byte slice"));
     (biased ^ 0x8000_0000_0000_0000u64) as i64
 }
 
@@ -154,7 +154,7 @@ impl Storage {
                 if bytes.len() < 8 {
                     return Ok(0);
                 }
-                Ok(u64::from_be_bytes(bytes[..8].try_into().unwrap()))
+                Ok(u64::from_be_bytes(bytes[..8].try_into().expect("8-byte slice guaranteed by len check above")))
             }
         }
     }
@@ -216,9 +216,9 @@ impl Storage {
                     let b = v.value();
                     if b.len() < 24 { None } else {
                         Some(HisStat {
-                            size:        u64::from_be_bytes(b[0..8].try_into().unwrap()),
-                            first_ticks: i64::from_be_bytes(b[8..16].try_into().unwrap()),
-                            last_ticks:  i64::from_be_bytes(b[16..24].try_into().unwrap()),
+                            size:        u64::from_be_bytes(b[0..8].try_into().expect("24-byte slice guaranteed by len check above")),
+                            first_ticks: i64::from_be_bytes(b[8..16].try_into().expect("24-byte slice guaranteed by len check above")),
+                            last_ticks:  i64::from_be_bytes(b[16..24].try_into().expect("24-byte slice guaranteed by len check above")),
                         })
                     }
                 }
@@ -354,9 +354,9 @@ impl Storage {
             Some(v) => {
                 let bytes = v.value();
                 if bytes.len() < 24 { return Ok(HisStat::empty()); }
-                let size        = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
-                let first_ticks = i64::from_be_bytes(bytes[8..16].try_into().unwrap());
-                let last_ticks  = i64::from_be_bytes(bytes[16..24].try_into().unwrap());
+                let size        = u64::from_be_bytes(bytes[0..8].try_into().expect("24-byte slice guaranteed by len check above"));
+                let first_ticks = i64::from_be_bytes(bytes[8..16].try_into().expect("24-byte slice guaranteed by len check above"));
+                let last_ticks  = i64::from_be_bytes(bytes[16..24].try_into().expect("24-byte slice guaranteed by len check above"));
                 Ok(HisStat { size, first_ticks, last_ticks })
             }
         }
