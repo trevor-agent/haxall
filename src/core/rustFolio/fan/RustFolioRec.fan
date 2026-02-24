@@ -13,22 +13,59 @@ using folio
 
 **
 ** RustFolioRec wraps a Dict for the FolioRec mixin.
-** Watch tracking is local to the Fantom side since watches are a Fantom-level concern.
-** Refs cross a process boundary — each deserialization produces a new Dict instance,
-** so identity-based checks (verifySame) must use equality instead.
+**
+** Design: one canonical instance per record id, held in RustFolio.recCache.
+** The dict is mutable in-place (AtomicRef) so that reads can refresh the
+** content without creating a new instance.  ticks and watchCount are stable
+** across reads — they are only updated when the record is actually committed
+** (updateOnCommit) or added to a watch (watchIncrement/watchDecrement).
+**
+** This mirrors hxFolio's Rec design and fixes two watch bugs that arise when
+** a new RustFolioRec is constructed per readRecById call:
+**   BUG-1: ticks = nowTicks at construction → every record looks "changed" on
+**          every watch poll, even when nothing changed.
+**   BUG-2: watchRef = AtomicInt(0) per instance → watchCount is always 0,
+**          watchIncrement/Decrement have no lasting effect.
 **
 const class RustFolioRec : FolioRec
 {
-  new make(Dict dict) { this.dictRef = dict }
+  **
+  ** Make a RustFolioRec.  ticks starts at 1 (unmodified baseline) so that
+  ** watch polls do not see the record as "changed" until updateOnCommit() is
+  ** called.  Use make() for newly-read records; call updateOnCommit() immediately
+  ** after if the record was just committed.
+  **
+  new make(Dict dict) { dictRef = AtomicRef(dict) }
 
-  override Dict dict() { dictRef }
-  private const Dict dictRef
+  ** Update the dict in-place without changing ticks or watchCount.
+  ** Called from doReadRecById after fetching the latest dict from Rust.
+  Void refreshDict(Dict d) { dictRef.val = d }
 
-  override Int ticks()            { ticksRef.val }
-  override Int watchCount()       { watchRef.val }
-  override Int watchIncrement()   { watchRef.incrementAndGet }
-  override Int watchDecrement()   { watchRef.decrementAndGet }
+  **
+  ** Update both dict and ticks.  Called after a successful commit so that
+  ** any open watch poll will see this record as changed.
+  **
+  Void updateOnCommit(Dict d)
+  {
+    dictRef.val  = d
+    ticksRef.val = Duration.nowTicks
+  }
 
-  private const AtomicInt ticksRef := AtomicInt(Duration.nowTicks)
+  override Dict dict() { dictRef.val }
+
+  ** Ticks of last persistent or transient change (1 = never modified via this instance).
+  override Int ticks() { ticksRef.val }
+
+  ** Number of active watchers on this record.
+  override Int watchCount()     { watchRef.val }
+
+  ** Increment watch count; returns new count.
+  override Int watchIncrement() { watchRef.incrementAndGet }
+
+  ** Decrement watch count; returns new count.
+  override Int watchDecrement() { watchRef.decrementAndGet }
+
+  private const AtomicRef dictRef                  // Dict — updated on read + commit
+  private const AtomicInt ticksRef := AtomicInt(1) // 1 = baseline (never "now")
   private const AtomicInt watchRef := AtomicInt(0)
 }

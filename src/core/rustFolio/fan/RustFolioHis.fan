@@ -43,6 +43,10 @@ const class RustFolioHis : FolioHis
   private Str:RustHisStat statCache() { ((Unsafe)statRef.val).val }
   private Void setStatCache(Str:RustHisStat c) { statRef.val = Unsafe(c) }
 
+  ** Clear the stats cache on reconnect so stale values are not returned.
+  ** Entries will be lazily re-populated from Rust on the next statFor() call.
+  internal Void clearStatsCache() { setStatCache(Str:RustHisStat[:]) }
+
   **
   ** Return cached stats for the given point id.
   ** On cache miss (e.g. after restart), performs a lazy HIS_STAT RPC.

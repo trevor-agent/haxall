@@ -77,6 +77,18 @@ class RustFolioProcess
   Bool isRunning() { process != null }
 
   **
+  ** OS-level liveness check.  rust-folio deletes its port file on clean
+  ** shutdown; after a crash the file remains.  Combining the port file's
+  ** presence with the spawned-process check gives a practical signal:
+  **
+  **   false — process was never started, or exited cleanly (port file gone)
+  **   true  — process is running, or crashed without cleaning up the port file
+  **
+  ** Either way a true result means we must call kill() before respawning.
+  **
+  Bool isAlive() { process != null && portFile.exists }
+
+  **
   ** Wait for the process to exit gracefully (after Close opcode was sent).
   ** Returns exit code or -1 on timeout.
   **

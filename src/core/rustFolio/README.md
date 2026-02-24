@@ -21,9 +21,11 @@ The architecture is a **two-process model**:
 │    ├─ RustFolioHis                  │  │                             │
 │    ├─ RustFolioBackup (zip)         │  │  redb B-tree database       │
 │    ├─ LocalFolioFile (disk)         │  │  Filter eval (native)       │
-│    └─ RustFolioDisMgr (cache)       │  │  History + Backup (redb)    │
-│                                     │  │                             │
-│  RustFolioTestImpl ◄── testFolio ─  │  └─────────────────────────────┘
+│    ├─ RustFolioDisMgr (dis cache)   │  │  History + Backup (redb)    │
+│    ├─ recCache (FolioRec cache)     │  │                             │
+│    └─ transientRegistry             │  └─────────────────────────────┘
+│                                     │
+│  RustFolioTestImpl ◄── testFolio ─  │
 └─────────────────────────────────────┘
 ```
 
@@ -181,11 +183,19 @@ hashed across 1024 subdirectory buckets. This is correct for single-node
 deployments. A cloud or distributed blob store would require a different
 `FolioFile` implementation.
 
-### Single-connection model
+### Reconnect-on-failure
 
-The Rust server accepts exactly one TCP connection. Reconnection after an
-unexpected disconnect is not handled. Production use would require a
-connect-with-retry strategy in `RustFolioConn`.
+When the Rust process crashes, `RustFolio` detects the `IOErr` from the broken
+TCP connection and reconnects automatically: kills the dead process, spawns a
+fresh one, replays the transient registry to the new process, and recomputes
+the dis cache. Up to 3 attempts, 1 second apart.
+
+Write operations (commits) that were in-flight at crash time are **not** retried
+— they propagate `IOErr` to the caller, who is responsible for recovery. Read
+operations are retried once automatically.
+
+A `WARN` log is emitted if `curVer` advanced during the crash window, indicating
+a "phantom commit" (Scenario A: commit persisted but ACK never reached Fantom).
 
 ### Prefix rename unsupported
 
@@ -220,6 +230,25 @@ History items are persisted in redb's `HISTORY` table using a composite key:
 maps signed i64 to u64 so that big-endian byte order yields natural chronological
 ordering. Stats (size, first, last) are cached in `HISTORY_META` and updated
 atomically on every write.
+
+### Reconnect and transient registry
+
+When the Rust process crashes, `doReadRecById` and `doCommitAllAsync` catch the
+`IOErr` and call `doReconnect()`. Reconnect kills the dead process, spawns fresh,
+reads the new `curVer` to check for phantom commits (Q3 detection), replays the
+transient registry, recomputes the dis cache, and clears the his stats cache.
+
+**Transient registry:** Transient commits (`Diff.transient`) are always updates
+to existing persistent records (the Diff API rejects `transient+add`). After each
+successful transient commit, `RustFolio` accumulates the effective transient tag
+overlay per record in a Fantom-side `AtomicRef` map. On reconnect, each entry
+is replayed as `Diff(rec, overlay, Diff.transient)` to the new Rust process.
+
+**RustFolioRec cache:** `RustFolio.recCache` holds one canonical `RustFolioRec`
+per record id. `doReadRecById` returns the cached instance (refreshing its dict
+from Rust on each call). `ticks` is updated only on successful commit — not on
+read — so watch polls only see a record as changed when it was actually committed.
+`watchCount` persists on the shared instance across all reads.
 
 ### Backup via logical redb copy
 
@@ -257,7 +286,6 @@ already available post-read.
 ## Future Improvements
 
 - **Incremental dis updates** — reduce O(n)/commit cost with dirty-set tracking.
-- **Reconnect-on-failure** — automatic reconnect in `RustFolioConn` after unexpected disconnect.
 - **Prefix rename** — atomic id rewrite across all records in redb.
 - **Performance benchmarks** — compare throughput and latency against hxFolio at scale.
 
