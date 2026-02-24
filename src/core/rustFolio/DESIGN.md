@@ -271,12 +271,15 @@ then resolves `IsSpec(name)` in O(1): look up the record's `spec` Ref id in the
 
 **Initialization:** The Xeto namespace is typically unavailable at folio open
 time (libs are loaded after the folio is opened). `syncSpec()` sends an empty map
-if the namespace is null, leaving Rust with no spec hierarchy. The map is
-populated on the first reconnect, when the namespace is guaranteed to be
-available. Until then, `isSpec` evaluates to false — the same behavior as
-before F1 was implemented. A lazy trigger from within `doReadAll` was considered
-and rejected: during lib initialization, `hooks.ns()` calls back into `doReadAll`
-(to read lib records from folio), creating infinite recursion.
+if the namespace is null. The populated map is pushed on the first persistent
+commit after the namespace becomes available, triggered from `doCommitAllAsync`.
+This is safe because `HxLibs.doUpdate()` sets `nsRef.val` *before* calling
+`folio.commitAll()`, so `hooks.ns(false)` inside the commit path returns
+immediately without triggering a recursive lib update. A lazy trigger directly
+from `doReadAll` was considered and rejected: during lib initialization, `hooks.ns()`
+causes a lib update which reads lib records via `folio.readAllList` → `doReadAll`,
+creating infinite recursion. The `doCommitAllAsync` path avoids this because
+`nsRef.val` is already set by the time the commit fires.
 
 **Runtime lib changes:** If Xeto libs are added or removed at runtime, the Rust-side
 spec map goes stale until the next restart or reconnect. There is no public
