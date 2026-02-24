@@ -47,32 +47,25 @@ All milestones and production phases are complete. Recorded here for reference.
 | N1 Chunked readAll | 2026-02-23 | `7139e1fa` ✅ |
 | S1 Socket authentication | 2026-02-23 | `372f141e` ✅ |
 | Namespace reload hook | 2026-02-23 | `05e3b25d` ✅ |
+| Code cleanup (deps + dead code + naming) | 2026-02-24 | `3c2d4c8f` + `7522c3a2`, 0 warnings ✅ |
+| Performance benchmarks (Tier 0/1/2) | 2026-02-24 | `c37b4382`, full results in BENCHMARKS.md ✅ |
 
 ---
 
 ## Open Items
 
-Ordered by implementation priority. All are tracked in DESIGN.md §16 Future Work.
+All production milestones, optimizations, security, and benchmarks are complete.
+Remaining items are tracked in DESIGN.md §16 Future Work:
 
-### 1. Performance Benchmarks
-
-**Priority:** Low (validation)
-**Effort:** Medium
-**Scope:** Tooling — no production code changes
-
-No formal throughput or latency comparison against hxFolio has been conducted.
-Target: benchmark at 1K, 10K, and 100K records with mixed read/write/filter workloads.
-Expected advantage for rustFolio: read-heavy workloads with indexed Has-filters.
-Expected parity: write throughput (both bottlenecked by the single-writer redb model
-vs. hxFolio's actor queue).
-
-Defines the "done" criteria for the optimization work above.
+- **readAll projection** — reduce IPC transfer cost for high-cardinality queries
+- **Scalability validation** — 50k–100k record benchmarks
 
 ---
 
 ## Notes
 
 - Design rationale for all items above is in `DESIGN.md §16 Future Work`.
-- Architectural decisions are in `DESIGN.md §15 Decision Log` (DEV-001 through DEV-014).
+- Architectural decisions are in `DESIGN.md §15 Decision Log` (DEV-001 through DEV-019).
+- `BENCHMARKS.md` contains methodology, all Tier 0/1/2 results, key findings, and the run log for all performance characterization work.
 - Use `DESIGN.md` and `README.md` for permanent, upstream-mergeable content.
   PROGRESS.md is a working tracker and is intentionally not upstream-mergeable.

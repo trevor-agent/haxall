@@ -173,6 +173,29 @@ Omitting `folio.props` (or setting `backend=hxFolio`) falls back to the default.
 
 ---
 
+## Performance Characteristics
+
+Benchmarked on Apple Silicon arm64 (2026-02-24, commit c37b4382). Full results
+and methodology in `BENCHMARKS.md`.
+
+| Operation | rustFolio | hxFolio | Notes |
+|-----------|-----------|---------|-------|
+| readById | 24.7µs | 0.6µs | IPC floor — 24µs per call overhead |
+| readAll (7.5k results) | 40ms | 364µs | IPC-transfer-bound (Fantom deserialization) |
+| readAll (0 results) | **17.9µs** | 202µs | Tag index: **11× faster** |
+| commitAll batch=1 | 5ms | 102µs | redb fsync floor (durability guarantee) |
+| commitAll batch=100 | **8.7ms** | 9.3ms | Batch crossover: **rust wins at ≥100** |
+| hisRead 10k items | 3ms | N/A | Compact binary format |
+| hisWrite 1k items | 6ms | N/A | fsync-dominated |
+
+**Key tradeoffs:** rustFolio pays ~24µs IPC overhead per call (process isolation
+cost). High-cardinality readAll is transfer-bound (~35ms Fantom deserialization
+for 7.5k Dicts). Batch writes at ≥100 records are faster than hxFolio with
+stronger durability (WAL+fsync). Zero-result queries leverage the tag index for
+O(1) rejection.
+
+---
+
 ## Known Limitations
 
 ### File storage uses local filesystem
@@ -296,8 +319,8 @@ already available post-read.
 
 ## Future Improvements
 
-- **Namespace reload hook** — `isSpec` filter evaluation uses a spec hierarchy pushed from Fantom at open/reconnect. Runtime lib changes require a restart to refresh the map. The correct fix is a `onNamespaceModified` callback contributed to `FolioHooks` upstream.
-- **Performance benchmarks** — no formal throughput or latency comparison against hxFolio has been conducted. See `BENCHMARKS.md` for the plan.
+- **readAll projection** — High-cardinality readAll is IPC-transfer-bound (35ms for 7.5k Dicts due to Fantom-side deserialization). A projection API (return only requested tags) or `readAllIds` variant would reduce transfer volume significantly.
+- **Scalability validation** — Benchmarks cover 10k records. The 50k–100k range has not been formally validated. See `BENCHMARKS.md` §5.4.
 
 ---
 

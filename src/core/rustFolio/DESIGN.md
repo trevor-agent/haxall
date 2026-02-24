@@ -711,6 +711,7 @@ Decisions are identified by the codes used in `PROGRESS.md`.
 | DEV-016 | Custom tracing format matching Fantom log convention | Rust subprocess logs write to stderr (merged into JVM stdout by `RustFolioProcess`). Default tracing-subscriber emits UTC ISO-8601 timestamps that stand out against Fantom's `[HH:MM:SS DD-Mon-YY] [level] [tag]` format. Replaced with a custom `FormatEvent` (`FanLogFormat`) using `chrono::Local` for local time and a `PlainVisitor` that bypasses tracing-subscriber's ANSI field formatting. No new dependencies — `chrono` was already in the tree. |
 | DEV-017 | Token-in-port-file auth (S1) | A rogue local process could connect to the ephemeral port in the window between bind and Fantom's connect. Token placed in the port file (not a separate file) keeps the coordination mechanism atomic — there is no additional window. Port file chmod'd 0600 so only the owning user can read the token. Token transmitted as 32 raw bytes in the handshake (stored as 64 hex chars in the file for readability). Constant-time comparison prevents timing oracles. No new dependencies — token generated from `/dev/urandom` via `std::fs`. |
 | DEV-018 | Namespace reload via object identity in commitAll trigger | No upstream hook needed. `HxLibs.doUpdate()` creates a new `Namespace` object on every lib add/remove and stores it in `nsRef` **before** calling `folio.commitAll()`. Storing the last-synced `Namespace` reference in `lastSyncedNsRef` and comparing identity (`!==`) in the `commitAll` lazy trigger detects namespace changes in O(1) with no allocation. Re-sync fires during the lib commit so the Rust process has the updated map before any subsequent `isSpec` query runs. |
+| DEV-019 | Benchmark results: IPC-transfer-bound readAll, batch write crossover at ~100 | Tier 2 benchmarks confirm process isolation adds ~24µs IPC floor per call. readAll with large result sets is dominated by Fantom Dict deserialization (~35ms for 7.5k records), not Rust eval (~4ms). Batch commits cross over at ~100 records (87µs/rec rust vs 93µs/rec hx) due to redb WAL amortization. Zero-result queries are 11× faster via tag index. Full results in `BENCHMARKS.md`. |
 
 ---
 
@@ -718,7 +719,14 @@ Decisions are identified by the codes used in `PROGRESS.md`.
 
 The following improvements are planned but not yet implemented:
 
-**Performance benchmarks:** No formal throughput or latency comparison against
-hxFolio has been conducted. A comprehensive benchmark plan covering Rust
-microbenchmarks (criterion) and Fantom integration benchmarks (both backends) is
-documented in `BENCHMARKS.md`.
+**readAll projection / transfer optimization:** Tier 2 benchmarks (see
+`BENCHMARKS.md`) show that high-cardinality readAll is IPC-transfer-bound —
+Rust-side filter eval takes ~4ms but Fantom-side deserialization of 7.5k Dict
+results takes ~35ms. Pushing aggregation/projection into Rust (e.g., return only
+a requested tag subset, or `readAllIds` returning compact Ref lists) would reduce
+the transfer bottleneck without changing the process architecture.
+
+**Scalability validation at 50k–100k records:** Current benchmarks cover 1k–10k
+records. The scalability matrix (1k → 100k) has not been formally run. At 100k
+records, O(n) operations (full-scan filters, dis cache recompute) may require
+optimization.
