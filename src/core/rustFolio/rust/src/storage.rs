@@ -321,4 +321,82 @@ impl Storage {
         tx.commit()?;
         Ok(new_ver)
     }
+
+    // ── Backup ───────────────────────────────────────────────────────────────
+
+    /// Create a consistent point-in-time backup of all tables at `dest_path`.
+    ///
+    /// Opens a read transaction on the live database (pinning the MVCC snapshot),
+    /// then iterates RECORDS, META, HISTORY, and HISTORY_META tables and writes
+    /// all key-value pairs into a new redb database at `dest_path`.  The result
+    /// is a valid, self-contained redb file that can be opened with Storage::open.
+    ///
+    /// Any table that does not yet exist (empty database) is silently skipped.
+    pub fn backup_create(&self, dest_path: &Path) -> Result<()> {
+        // Pin the MVCC snapshot for the duration.
+        let rtxn = self.db.begin_read()?;
+
+        // Create destination database (overwrite if it exists).
+        if dest_path.exists() {
+            std::fs::remove_file(dest_path)?;
+        }
+        let backup_db = Database::create(dest_path)?;
+        let wtxn = backup_db.begin_write()?;
+
+        // Copy RECORDS (str → bytes).
+        match rtxn.open_table(RECORDS) {
+            Ok(src) => {
+                let mut dst = wtxn.open_table(RECORDS)?;
+                for entry in src.iter()? {
+                    let (k, v) = entry?;
+                    dst.insert(k.value(), v.value())?;
+                }
+            }
+            Err(redb::TableError::TableDoesNotExist(_)) => {}
+            Err(e) => return Err(FolioError::from(e)),
+        }
+
+        // Copy META (str → bytes).
+        match rtxn.open_table(META) {
+            Ok(src) => {
+                let mut dst = wtxn.open_table(META)?;
+                for entry in src.iter()? {
+                    let (k, v) = entry?;
+                    dst.insert(k.value(), v.value())?;
+                }
+            }
+            Err(redb::TableError::TableDoesNotExist(_)) => {}
+            Err(e) => return Err(FolioError::from(e)),
+        }
+
+        // Copy HISTORY (bytes → bytes).
+        match rtxn.open_table(HISTORY) {
+            Ok(src) => {
+                let mut dst = wtxn.open_table(HISTORY)?;
+                for entry in src.iter()? {
+                    let (k, v) = entry?;
+                    dst.insert(k.value(), v.value())?;
+                }
+            }
+            Err(redb::TableError::TableDoesNotExist(_)) => {}
+            Err(e) => return Err(FolioError::from(e)),
+        }
+
+        // Copy HISTORY_META (str → bytes).
+        match rtxn.open_table(HISTORY_META) {
+            Ok(src) => {
+                let mut dst = wtxn.open_table(HISTORY_META)?;
+                for entry in src.iter()? {
+                    let (k, v) = entry?;
+                    dst.insert(k.value(), v.value())?;
+                }
+            }
+            Err(redb::TableError::TableDoesNotExist(_)) => {}
+            Err(e) => return Err(FolioError::from(e)),
+        }
+
+        wtxn.commit()?;
+        drop(rtxn); // Release the MVCC snapshot
+        Ok(())
+    }
 }

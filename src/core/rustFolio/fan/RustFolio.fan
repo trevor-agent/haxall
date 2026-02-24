@@ -62,6 +62,9 @@ const class RustFolio : Folio
     // History implementation (see RustFolioHis)
     hisImpl = RustFolioHis(this)
 
+    // Backup implementation (see RustFolioBackup)
+    backupImpl = RustFolioBackup(this)
+
     // Display string manager — compute initial dis cache on open so that
     // post-reopen verifyDictDis checks work without an explicit syncDis call.
     disMgr = RustFolioDisMgr()
@@ -84,6 +87,9 @@ const class RustFolio : Folio
   ** History implementation
   private const RustFolioHis hisImpl
 
+  ** Backup implementation
+  private const RustFolioBackup backupImpl
+
   ** Display string manager (Fantom-side cache)
   private const RustFolioDisMgr disMgr
 
@@ -92,6 +98,9 @@ const class RustFolio : Folio
 
   ** Internal accessor for RustFolioHis to reach the connection.
   internal RustFolioConn? connForHis() { conn }
+
+  ** Internal accessor for RustFolioBackup to reach the connection.
+  internal RustFolioConn? connForBackup() { conn }
 
 //////////////////////////////////////////////////////////////////////////
 // Storage Metadata
@@ -146,11 +155,8 @@ const class RustFolio : Folio
 // Subsystems
 //////////////////////////////////////////////////////////////////////////
 
-  ** Backup — not yet implemented.
-  override FolioBackup backup()
-  {
-    throw UnsupportedErr("RustFolio.backup not implemented")
-  }
+  ** Backup — backed by RustFolioBackup (redb snapshot + Fantom zip).
+  override FolioBackup backup() { backupImpl }
 
   ** History — backed by redb via RustFolioHis.
   override FolioHis his() { hisImpl }

@@ -82,7 +82,7 @@ the rest of haxall.
 |-------|--------|-------------|
 | P1 - History persistence | ✅ 2026-02-23 | redb HISTORY + HISTORY_META tables; HIS_READ/HIS_WRITE/HIS_STAT RPCs. Gate: 10200 verifies ALL GREEN. |
 | P2 - Runtime integration | ✅ 2026-02-23 | folio.props backend selection in HxdBoot; hx init + hx run verified; API responding; 6 records persisted across restart. |
-| P3 - Backup | 🔲 pending | FolioBackup impl — consistent redb snapshot (redb has native snapshot API). |
+| P3 - Backup | ✅ complete | FolioBackup impl — consistent redb snapshot via logical table copy. |
 | P4 - File storage | 🔲 pending | FolioFile — blob table in Rust or Fantom-side disk delegation. |
 | P5 - Hardening | 🔲 pending | Incremental dis updates (O(n)/commit → dirty-set tracking). Reconnect-on-failure. Prefix rename. Benchmarking vs hxFolio. |
 
@@ -123,6 +123,32 @@ fan hx run myproject
 - `GET /api/sys/read?filter=id` → all 6 records returned via API ✓
 
 **Modified file:** `src/core/hxd/fan/HxdBoot.fan` (22 lines added to `initFolio()`)
+
+### P3 Design — Backup
+
+**Problem:** `RustFolio.backup()` throws `UnsupportedErr`. Backup is required for any production deployment — operators need a consistent, restorable snapshot of the database.
+
+**Approach:** Logical backup via a new `BACKUP_CREATE (0x0050)` RPC. Rust opens a read transaction on the live database, iterates RECORDS + HISTORY + HISTORY_META tables, and writes all key-value pairs into a new redb database file at a caller-specified temp path. Fantom then zips the snapshot file and moves it to the backup directory.
+
+**Why logical copy instead of file copy:**
+- A raw `std::fs::copy` of the live `.redb` file risks copying a partially-written page during a concurrent commit.
+- A logical copy (redb read transaction + new database write transaction) is guaranteed consistent — the read transaction pins the MVCC snapshot for the duration, and the destination database is a valid, self-contained redb file.
+- Slightly slower for large databases (full table scan vs file copy), but correct. We can revisit if benchmarks show it's a bottleneck.
+
+**Wire protocol:**
+- `BACKUP_CREATE (0x0050)`:  Request: `[str dest_path]` (length-prefixed UTF-8). Response: empty on success, error frame on failure.
+
+**Rust changes:**
+- `protocol.rs`: Add `BACKUP_CREATE = 0x0050` opcode constant.
+- `storage.rs`: Add `backup_create(dest_path: &Path) -> Result<()>`. Opens a read transaction, creates destination redb database, copies RECORDS / HISTORY / HISTORY_META tables (skipping any table that doesn't yet exist — empty database edge case).
+- `server.rs`: Add `handle_backup_create` + wire into `dispatch()`.
+
+**Fantom changes:**
+- `RustFolioConn.fan`: Add `opBackupCreate = 0x0050`, `backupCreate(Str destPath)` method.
+- `RustFolioBackup.fan` (new file): `const class RustFolioBackup : FolioBackup`. Backup dir = `{folio.dir}/../backup/`. `create()` runs in background (Fantom `Future` + `Actor`): checks `inProgress` flag, generates YYMMDD-hhmmss timestamp, calls `backupCreate` RPC with a temp path, zips snapshot into `{name}-{ts}.zip` at backup dir, deletes temp file, resolves future. `list()` scans dir for `*.zip` files and parses timestamps. `status()` / `summary()` / `monitor()` follow hxFolio's BackupMgr pattern.
+- `RustFolio.fan`: Add `backupImpl` field, initialize in constructor, `backup()` returns it.
+
+**Gate impact:** No new tests. Existing 10200 verifies must remain ALL GREEN after build.
 
 ## Build Notes
 

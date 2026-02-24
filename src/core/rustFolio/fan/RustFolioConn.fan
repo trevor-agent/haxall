@@ -46,9 +46,10 @@ class RustFolioConn
   static const Int opCurVer     := 0x0030
   static const Int opFlushMode  := 0x0031
   static const Int opFlush      := 0x0032
-  static const Int opHisRead    := 0x0040
-  static const Int opHisWrite   := 0x0041
-  static const Int opHisStat    := 0x0042
+  static const Int opHisRead      := 0x0040
+  static const Int opHisWrite     := 0x0041
+  static const Int opHisStat      := 0x0042
+  static const Int opBackupCreate := 0x0050
 
   // Error wire codes (must match Rust error.rs)
   private static const Int errCodeUnknownRec        := 0x0001
@@ -327,6 +328,25 @@ class RustFolioConn
     firstTicks := in.readS8
     lastTicks  := in.readS8
     return RustHisStat(size, firstTicks, lastTicks)
+  }
+
+//////////////////////////////////////////////////////////////////////////
+// Backup
+//////////////////////////////////////////////////////////////////////////
+
+  **
+  ** BackupCreate — instruct the Rust process to write a consistent
+  ** redb snapshot to the given absolute file path.
+  **
+  ** Request:  [str dest_path]
+  ** Response: empty (success) or error frame
+  **
+  Void backupCreate(Str destPath)
+  {
+    payload := Buf()
+    RustFolioSerializer.writeStr(payload.out, destPath)
+    sendRequest(opBackupCreate, payload)
+    readResponse(opBackupCreate) // empty response; throws on error
   }
 
 //////////////////////////////////////////////////////////////////////////

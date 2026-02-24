@@ -37,9 +37,10 @@ pub mod opcode {
     pub const CUR_VER:     u16 = 0x0030;
     pub const FLUSH_MODE:  u16 = 0x0031;
     pub const FLUSH:       u16 = 0x0032;
-    pub const HIS_READ:    u16 = 0x0040;
-    pub const HIS_WRITE:   u16 = 0x0041;
-    pub const HIS_STAT:    u16 = 0x0042;
+    pub const HIS_READ:      u16 = 0x0040;
+    pub const HIS_WRITE:     u16 = 0x0041;
+    pub const HIS_STAT:      u16 = 0x0042;
+    pub const BACKUP_CREATE: u16 = 0x0050;
 }
 
 /// Perform the version handshake (server side).

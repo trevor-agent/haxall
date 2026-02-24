@@ -151,9 +151,10 @@ impl Server {
             opcode::READ_ALL     => self.handle_read_all(payload, &mut pos),
             opcode::READ_COUNT   => self.handle_read_count(payload, &mut pos),
             opcode::COMMIT_ALL   => self.handle_commit_all(payload, &mut pos),
-            opcode::HIS_READ     => self.handle_his_read(payload, &mut pos),
-            opcode::HIS_WRITE    => self.handle_his_write(payload, &mut pos),
-            opcode::HIS_STAT     => self.handle_his_stat(payload, &mut pos),
+            opcode::HIS_READ       => self.handle_his_read(payload, &mut pos),
+            opcode::HIS_WRITE      => self.handle_his_write(payload, &mut pos),
+            opcode::HIS_STAT       => self.handle_his_stat(payload, &mut pos),
+            opcode::BACKUP_CREATE  => self.handle_backup_create(payload, &mut pos),
             _ => Err(FolioError::Protocol(format!("Unknown opcode: {:#06x}", op))),
         }
     }
@@ -371,6 +372,22 @@ impl Server {
         protocol::write_i64(&mut buf, stat.first_ticks);
         protocol::write_i64(&mut buf, stat.last_ticks);
         Ok(buf)
+    }
+
+    // ── Backup handlers ──────────────────────────────────────────────────────
+
+    /// BACKUP_CREATE — write a consistent redb snapshot to the given path.
+    ///
+    /// Request payload:  [str dest_path]
+    /// Response payload: empty (success) or error frame
+    fn handle_backup_create(&self, data: &[u8], pos: &mut usize) -> Result<Vec<u8>> {
+        if self.closed { return Err(FolioError::Shutdown); }
+
+        let dest_path_str = protocol::read_str_from(data, pos)?;
+        let dest_path     = std::path::Path::new(&dest_path_str);
+
+        self.storage.backup_create(dest_path)?;
+        Ok(Vec::new())
     }
 
     /// Enrich the id Ref with a dis string derived from the record's "dis" tag.
