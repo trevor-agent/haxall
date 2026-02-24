@@ -699,15 +699,6 @@ Decisions are identified by the codes used in `PROGRESS.md`.
 
 The following improvements are planned but not yet implemented:
 
-**Chunked readAll responses (N1):** `READ_ALL` responses are currently single-frame
-with a hard 64 MB cap enforced on both sides. At ~50K+ records the cap becomes
-relevant. The fix is a continuation-frame protocol: a new `READ_ALL_CHUNK` response
-variant streams fixed-size record batches (e.g., 1000 records per chunk), each
-independently framed, followed by an end-of-stream marker. The 64 MB limit becomes a
-per-chunk guard rather than a per-response guard. Fantom's `RustFolioConn.readAll()`
-accumulates chunks transparently. Requires coordinated opcode additions on both sides
-and a design pass for error-mid-stream handling.
-
 **Socket authentication (S1):** A shared-secret handshake in the protocol would be
 appropriate for deployments where per-process isolation is not guaranteed. Proposed
 approach: at startup, Rust generates a random token written to a temp file (or passed

@@ -39,6 +39,7 @@ All milestones and production phases are complete. Recorded here for reference.
 | N2 Prefix rename | 2026-02-23 | `a03d168e` ✅ |
 | L1 Log format alignment | 2026-02-23 | `dd589dd6` ✅ |
 | O3 Incremental his_stat | 2026-02-23 | `70220ac5` ✅ |
+| N1 Chunked readAll | 2026-02-23 | `7139e1fa` ✅ |
 
 ---
 
@@ -46,29 +47,7 @@ All milestones and production phases are complete. Recorded here for reference.
 
 Ordered by implementation priority. All are tracked in DESIGN.md §16 Future Work.
 
-### 1. N1 — Chunked readAll Responses
-
-**Priority:** Medium (scale safety)
-**Effort:** Medium
-**Scope:** Protocol change — both Rust and Fantom
-
-`READ_ALL` responses are single-frame with a hard 64 MB cap enforced on both sides.
-At ~50K+ records (average record size) this limit becomes relevant. The fix is a
-continuation-frame protocol so large result sets are streamed in chunks rather than
-buffered entirely.
-
-Approach: a new `READ_ALL_CHUNK` response variant. The Rust server writes a response
-header with `is_chunked = true`, then streams fixed-size record batches (e.g., 1000
-records per chunk), each framed independently, followed by an end-of-stream marker.
-The Fantom `RustFolioConn.readAll()` accumulates chunks transparently. The 64 MB
-cap remains as a per-chunk guard rather than a per-response guard.
-
-Requires design work before implementation (opcode layout, back-pressure, error
-mid-stream).
-
----
-
-### 2. S1 — Socket Authentication
+### 1. S1 — Socket Authentication
 
 **Priority:** Medium (security)
 **Effort:** Small-Medium
@@ -86,7 +65,7 @@ constant-time string comparison.
 
 ---
 
-### 3. Namespace Reload Hook (Upstream Contribution)
+### 2. Namespace Reload Hook (Upstream Contribution)
 
 **Priority:** Low (upstream Haxall)
 **Effort:** Small
@@ -105,7 +84,7 @@ the main work is the upstream coordination.
 
 ---
 
-### 4. Performance Benchmarks
+### 3. Performance Benchmarks
 
 **Priority:** Low (validation)
 **Effort:** Medium
