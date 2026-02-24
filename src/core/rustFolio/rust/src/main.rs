@@ -13,7 +13,6 @@ mod filter;
 mod query;
 mod server;
 
-use clap::Parser;
 use config::Config;
 use tracing::field::{Field, Visit};
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, format::Writer};

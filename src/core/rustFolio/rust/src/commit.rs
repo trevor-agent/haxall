@@ -33,11 +33,11 @@ pub fn commit_all(
     let mut persistent_changes: Vec<(String, Option<Dict>)> = Vec::new();
 
     for diff in diffs {
-        let id = normalize_id(&diff.id.id, config);
+        let id = norm_id(&diff.id.id, config);
         // Normalize all Ref-valued tags in the changes (relative → absolute),
         // mirroring FolioFlatFile's Etc.mapRefs pass during commit.
         // Pass the cache so dis can be looked up for relative Refs with no dis.
-        let changes = normalize_refs_in_dict(&diff.changes, config, Some(cache));
+        let changes = norm_refs_in_dict(&diff.changes, config, Some(cache));
 
         if diff.is_transient() {
             // Transient commit — in-memory only, no redb write.
@@ -114,7 +114,7 @@ pub fn commit_all(
 /// Validate all diffs — abort on first failure.
 fn validate_diffs(cache: &RecordCache, diffs: &[Diff], config: &Config) -> Result<()> {
     for diff in diffs {
-        let id = normalize_id(&diff.id.id, config);
+        let id = norm_id(&diff.id.id, config);
         let id = id.as_str();
 
         if diff.is_add() {
@@ -158,8 +158,8 @@ fn build_add_dict(
     new_mod: &chrono::DateTime<Tz>,
     config: &Config,
 ) -> Dict {
-    // Use normalize_id: handles both prefix application and the "null" guard.
-    let abs_id = normalize_id(id_str, config);
+    // Use norm_id: handles both prefix application and the "null" guard.
+    let abs_id = norm_id(id_str, config);
 
     // Build from changes, skipping Val::Remove entries (they're no-ops on add)
     let mut dict = Dict::default();
@@ -175,7 +175,7 @@ fn build_add_dict(
 
 /// Normalize an id with the configured prefix (if any).
 /// "null" is Ref.nullRef — never prefixed regardless of config.
-pub fn normalize_id(id: &str, config: &Config) -> String {
+pub fn norm_id(id: &str, config: &Config) -> String {
     if id == "null" { return id.to_string(); }
     if let Some(prefix) = &config.id_prefix {
         if !id.contains(':') {
@@ -190,18 +190,18 @@ pub fn normalize_id(id: &str, config: &Config) -> String {
 /// we attempt to look up the referenced record's dis tag and copy it — matching
 /// FolioFlatFile's round-trip behaviour where id.disVal is set from the record's
 /// computed dis string and therefore propagates into stored ref tags.
-pub fn normalize_refs_in_dict(dict: &Dict, config: &Config, cache: Option<&RecordCache>) -> Dict {
+pub fn norm_refs_in_dict(dict: &Dict, config: &Config, cache: Option<&RecordCache>) -> Dict {
     let mut out = Dict::default();
     for (name, val) in &dict.tags {
-        out.set(name.clone(), normalize_refs_in_val(val, config, cache));
+        out.set(name.clone(), norm_refs_in_val(val, config, cache));
     }
     out
 }
 
-fn normalize_refs_in_val(val: &Val, config: &Config, cache: Option<&RecordCache>) -> Val {
+fn norm_refs_in_val(val: &Val, config: &Config, cache: Option<&RecordCache>) -> Val {
     match val {
         Val::Ref(r) => {
-            let abs_id = normalize_id(&r.id, config);
+            let abs_id = norm_id(&r.id, config);
             // When cache is available (commit path): derive dis from the live record,
             // matching hxFolio normRef semantics — if the referenced record exists,
             // use its dis; if it does not exist, strip dis (ref.noDis).
@@ -219,10 +219,10 @@ fn normalize_refs_in_val(val: &Val, config: &Config, cache: Option<&RecordCache>
             }
         }
         Val::List(items) => {
-            Val::List(items.iter().map(|v| normalize_refs_in_val(v, config, cache)).collect())
+            Val::List(items.iter().map(|v| norm_refs_in_val(v, config, cache)).collect())
         }
         Val::Dict(d) => {
-            Val::Dict(normalize_refs_in_dict(d, config, cache))
+            Val::Dict(norm_refs_in_dict(d, config, cache))
         }
         _ => val.clone(),
     }

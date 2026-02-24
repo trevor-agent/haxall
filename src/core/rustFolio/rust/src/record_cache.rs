@@ -1,6 +1,6 @@
 // record_cache.rs — In-memory record cache with persistent/transient/merged split.
 //
-// Mirrors HxFolio's Rec class. The cache is the source of truth for reads.
+// FolioRec mirrors HxFolio's FolioRec class. The cache is the source of truth for reads.
 // redb is the source of truth for persistence.
 //
 // On startup: load all records from redb into cache (persistent layer only).
@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use crate::types::*;
 
 /// A single record's three-layer state.
-pub struct Record {
+pub struct FolioRec {
     /// Persistent tags — stored in redb, survive restart.
     /// Always contains "id" and "mod" tags.
     pub persistent: Dict,
@@ -31,11 +31,11 @@ pub struct Record {
     pub ticks: u64,
 }
 
-impl Record {
+impl FolioRec {
     pub fn from_persistent(persistent: Dict) -> Self {
         let merged = persistent.clone();
         let dis    = merged.id().map(|r| r.id.clone()).unwrap_or_default();
-        Record {
+        FolioRec {
             persistent,
             transient: Dict::new(),
             merged,
@@ -57,8 +57,8 @@ impl Record {
 
 /// In-memory record cache.
 pub struct RecordCache {
-    /// Primary index: normalized Ref.id → Record
-    pub by_id: HashMap<String, Record>,
+    /// Primary index: normalized Ref.id → FolioRec
+    pub by_id: HashMap<String, FolioRec>,
 
     /// Secondary tag-presence index: tag name → set of record ids that have the tag.
     /// Tracks the merged view (persistent + transient). Used to accelerate Has-based
@@ -90,19 +90,19 @@ impl RecordCache {
     pub fn load(&mut self, records: Vec<(String, Dict)>) {
         for (id, dict) in records {
             self.index_add(&id, &dict);
-            self.by_id.insert(id, Record::from_persistent(dict));
+            self.by_id.insert(id, FolioRec::from_persistent(dict));
         }
     }
 
     /// Look up a record by id (returns merged Dict, excludes trash).
-    pub fn get(&self, id: &str) -> Option<&Record> {
+    pub fn get(&self, id: &str) -> Option<&FolioRec> {
         let rec = self.by_id.get(id)?;
         if rec.is_trash() { return None; }
         Some(rec)
     }
 
     /// Look up a record including trash records.
-    pub fn get_any(&self, id: &str) -> Option<&Record> {
+    pub fn get_any(&self, id: &str) -> Option<&FolioRec> {
         self.by_id.get(id)
     }
 
@@ -143,7 +143,7 @@ impl RecordCache {
                     }
                     None => {
                         // New record — add all merged tags to index.
-                        let rec = Record::from_persistent(dict);
+                        let rec = FolioRec::from_persistent(dict);
                         self.index_add(id, &rec.merged);
                         self.by_id.insert(id.to_string(), rec);
                     }

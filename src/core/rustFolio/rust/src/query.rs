@@ -27,8 +27,10 @@ impl QueryOpts {
         let sort = matches!(opts.get("sort"), Some(Val::Marker));
         QueryOpts { include_trash, limit, sort }
     }
+}
 
-    pub fn default() -> Self {
+impl Default for QueryOpts {
+    fn default() -> Self {
         QueryOpts { include_trash: false, limit: None, sort: false }
     }
 }

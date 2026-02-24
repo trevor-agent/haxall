@@ -241,7 +241,7 @@ impl Server {
     fn handle_read_by_id(&self, data: &[u8], pos: &mut usize) -> Result<Vec<u8>> {
         if self.closed { return Err(FolioError::Shutdown); }
         let id_ref = read_href(data, pos)?;
-        let abs_id = commit::normalize_id(&id_ref.id, &self.config);
+        let abs_id = commit::norm_id(&id_ref.id, &self.config);
         let mut buf = Vec::new();
         match self.cache.get(&abs_id) {
             None => {
@@ -249,7 +249,7 @@ impl Server {
             }
             Some(rec) => {
                 protocol::write_u8(&mut buf, 0x01);
-                let dict = self.enrich_id_dis(&rec.merged);
+                let dict = self.norm_id_dis(&rec.merged);
                 write_dict(&mut buf, &dict);
             }
         }
@@ -263,12 +263,12 @@ impl Server {
         protocol::write_u32(&mut buf, count as u32);
         for _ in 0..count {
             let id_ref = read_href(data, pos)?;
-            let abs_id = commit::normalize_id(&id_ref.id, &self.config);
+            let abs_id = commit::norm_id(&id_ref.id, &self.config);
             match self.cache.get(&abs_id) {
                 None => protocol::write_u8(&mut buf, 0x00),
                 Some(rec) => {
                     protocol::write_u8(&mut buf, 0x01);
-                    let dict = self.enrich_id_dis(&rec.merged);
+                    let dict = self.norm_id_dis(&rec.merged);
                     write_dict(&mut buf, &dict);
                 }
             }
@@ -290,8 +290,8 @@ impl Server {
         protocol::write_u32(&mut buf, results.len() as u32);
         for r in &results {
             // Enrich new_rec and old_rec so their id.dis is consistent with readById
-            let enriched_new = r.new_rec.as_ref().map(|d| self.enrich_id_dis(d));
-            let enriched_old = r.old_rec.as_ref().map(|d| self.enrich_id_dis(d));
+            let enriched_new = r.new_rec.as_ref().map(|d| self.norm_id_dis(d));
+            let enriched_old = r.old_rec.as_ref().map(|d| self.norm_id_dis(d));
             // Result id Ref: derive dis from enriched_new (or old) for consistency
             let enriched_id = if let Some(ref d) = enriched_new {
                 d.id().cloned().unwrap_or_else(|| r.id.clone())
@@ -348,7 +348,7 @@ impl Server {
             buf.push(if i < last_idx { 0x01u8 } else { 0x00u8 }); // has_more
             protocol::write_u32(&mut buf, chunk.len() as u32);
             for rec in *chunk {
-                let enriched = self.enrich_id_dis(rec);
+                let enriched = self.norm_id_dis(rec);
                 write_dict(&mut buf, &enriched);
             }
             payloads.push(buf);
@@ -526,7 +526,7 @@ impl Server {
 
     /// Enrich the id Ref with a dis string derived from the record's "dis" tag.
     /// Full disMacro computation is handled Fantom-side by RustFolioDisMgr.
-    fn enrich_id_dis(&self, dict: &Dict) -> Dict {
+    fn norm_id_dis(&self, dict: &Dict) -> Dict {
         let mut d = dict.clone();
         if let Some(Val::Ref(id_ref)) = dict.get("id") {
             // Only set dis if the record has an explicit "dis" tag
