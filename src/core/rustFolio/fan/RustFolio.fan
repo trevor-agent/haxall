@@ -133,6 +133,13 @@ const class RustFolio : Folio
   **
   private const AtomicInt lastKnownVerRef := AtomicInt(0)
 
+  ** True once syncSpec() has successfully synced a non-null namespace.
+  ** Guards the post-commit lazy trigger so the AtomicBool check is the
+  ** only cost on subsequent persistent commits after the first sync.
+  ** Reset on reconnect so the new Rust process receives a fresh SPEC_UPDATE.
+  **
+  private const AtomicBool specSyncedRef := AtomicBool(false)
+
   private RustFolioConn? conn() { (connRef.val as Unsafe)?.val }
   private RustFolioProcess? rustProcess() { (processRef.val as Unsafe)?.val }
 
@@ -344,6 +351,7 @@ const class RustFolio : Folio
     hisImpl.clearStatsCache
 
     // 9. Sync spec hierarchy — namespace is available by reconnect time
+    specSyncedRef.val = false
     syncSpec
   }
 
@@ -385,6 +393,7 @@ const class RustFolio : Folio
     }
 
     c.specUpdate(subtypeMap)
+    specSyncedRef.val = ns != null
   }
 
   private static Void syncSpecAdd([Str:Str[]] map, Str parent, Str subtype)
@@ -765,6 +774,19 @@ const class RustFolio : Folio
     {
       log.err("rust-folio incremental dis update failed; falling back to full sweep", e)
       try { disMgr.updateAll(c.readAll(Filter.has("id"), null)) } catch (Err e2) {}
+    }
+
+    // One-time spec sync: on the first persistent commit after the Xeto namespace
+    // becomes available, push the spec hierarchy to Rust.
+    //
+    // Safe to call here: HxLibs.doUpdate() sets nsRef.val BEFORE calling
+    // folio.commitAll(), so hooks.ns(false) returns immediately (no recursive
+    // lib update). We skip transient-only commits (curVal etc.) — no namespace
+    // change can come from those. Guarded by specSyncedRef so this check costs
+    // a single AtomicBool read on every subsequent persistent commit.
+    if (!hasTransient && !specSyncedRef.val)
+    {
+      try { if (hooks.ns(false) != null) syncSpec } catch (UnsupportedErr e) {}
     }
 
     return FolioFuture.makeSync(CommitFolioRes(completed))
