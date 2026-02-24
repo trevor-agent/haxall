@@ -693,18 +693,13 @@ Decisions are identified by the codes used in `PROGRESS.md`.
 | DEV-015 | Prefix rename in Server::open(), not via RPC | hxFolio sidesteps prefix rename by storing relative Refs (prefix applied on load). rustFolio stores absolute Refs, so rename requires rewriting all stored data. Performed at startup before accepting connections — no new opcode, no Fantom changes, crash-safe via single write transaction. |
 | DEV-016 | Custom tracing format matching Fantom log convention | Rust subprocess logs write to stderr (merged into JVM stdout by `RustFolioProcess`). Default tracing-subscriber emits UTC ISO-8601 timestamps that stand out against Fantom's `[HH:MM:SS DD-Mon-YY] [level] [tag]` format. Replaced with a custom `FormatEvent` (`FanLogFormat`) using `chrono::Local` for local time and a `PlainVisitor` that bypasses tracing-subscriber's ANSI field formatting. No new dependencies — `chrono` was already in the tree. |
 | DEV-017 | Token-in-port-file auth (S1) | A rogue local process could connect to the ephemeral port in the window between bind and Fantom's connect. Token placed in the port file (not a separate file) keeps the coordination mechanism atomic — there is no additional window. Port file chmod'd 0600 so only the owning user can read the token. Token transmitted as 32 raw bytes in the handshake (stored as 64 hex chars in the file for readability). Constant-time comparison prevents timing oracles. No new dependencies — token generated from `/dev/urandom` via `std::fs`. |
+| DEV-018 | Namespace reload via object identity in commitAll trigger | No upstream hook needed. `HxLibs.doUpdate()` creates a new `Namespace` object on every lib add/remove and stores it in `nsRef` **before** calling `folio.commitAll()`. Storing the last-synced `Namespace` reference in `lastSyncedNsRef` and comparing identity (`!==`) in the `commitAll` lazy trigger detects namespace changes in O(1) with no allocation. Re-sync fires during the lib commit so the Rust process has the updated map before any subsequent `isSpec` query runs. |
 
 ---
 
 ## 16. Future Work
 
 The following improvements are planned but not yet implemented:
-
-**Namespace reload hook:** When Xeto libs are added or removed at runtime, the
-Rust-side spec subtype map (used for `isSpec` filter evaluation) goes stale until
-the next restart or reconnect. The correct fix is a `onNamespaceModified(Namespace)`
-callback contributed to `FolioHooks` upstream, allowing all Folio implementations
-to react to namespace changes. Until that hook exists, restart is the recovery path.
 
 **Performance benchmarks:** No formal throughput or latency comparison against
 hxFolio has been conducted. Baseline benchmarks at representative record counts

@@ -46,6 +46,7 @@ All milestones and production phases are complete. Recorded here for reference.
 | O3 Incremental his_stat | 2026-02-23 | `70220ac5` ✅ |
 | N1 Chunked readAll | 2026-02-23 | `7139e1fa` ✅ |
 | S1 Socket authentication | 2026-02-23 | `372f141e` ✅ |
+| Namespace reload hook | 2026-02-23 | `05e3b25d` ✅ |
 
 ---
 
@@ -53,26 +54,7 @@ All milestones and production phases are complete. Recorded here for reference.
 
 Ordered by implementation priority. All are tracked in DESIGN.md §16 Future Work.
 
-### 1. Namespace Reload Hook (Upstream Contribution)
-
-**Priority:** Low (upstream Haxall)
-**Effort:** Small
-**Scope:** `folio::FolioHooks` + `hxm::HxFolioHooks` — upstream contribution
-
-`isSpec` filter evaluation uses a spec hierarchy pushed from Fantom at open/reconnect
-(`SPEC_UPDATE`, 0x0060). If Xeto libs are added or removed at runtime, the Rust-side
-map goes stale until the next restart or reconnect.
-
-The correct fix: add `onNamespaceModified(Namespace ns): Void` to `FolioHooks`.
-`HxFolioHooks` overrides it and calls `rt.onNamespaceModified` (already exists) plus
-notifies the Folio implementation. `RustFolio` overrides it to call `syncSpec()`.
-
-This requires a PR to the upstream `haxall/haxall` repo. Design is straightforward;
-the main work is the upstream coordination.
-
----
-
-### 2. Performance Benchmarks
+### 1. Performance Benchmarks
 
 **Priority:** Low (validation)
 **Effort:** Medium
