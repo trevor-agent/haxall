@@ -682,8 +682,35 @@ const class RustFolio : Folio
     updateRecCacheAfterCommit(completed)
     if (hasTransient) updateTransientRegistry(diffs)
 
-    // Refresh the dis cache after every commit
-    disMgr.updateAll(c.readAll(Filter.has("id"), null))
+    // O1: Incremental dis update.
+    //
+    // Dirty set = committed record dicts (free from Diff.newRec) + all
+    // records with disMacro (one filtered RPC — typically a small subset
+    // of the total record count).
+    //
+    // This replaces the O(n) updateAll(readAll(has("id"))) with an O(dirty+macro)
+    // sweep.  Non-dirty cache entries remain valid because toDis() memoisation
+    // short-circuits on any id that was not evicted from the cache copy.
+    //
+    // Falls back to a full updateAll on any RPC error so the cache is never
+    // left in an inconsistent state.
+    try
+    {
+      committedDicts := Dict[,]
+      removedIds     := Str[,]
+      completed.each |d|
+      {
+        if (d.isRemove)        removedIds.add(d.id.id)
+        else if (d.newRec != null) committedDicts.add(d.newRec)
+      }
+      macroDicts := c.readAll(Filter.has("disMacro"), null)
+      disMgr.updateDirty(committedDicts, removedIds, macroDicts)
+    }
+    catch (Err e)
+    {
+      log.err("rust-folio incremental dis update failed; falling back to full sweep", e)
+      try { disMgr.updateAll(c.readAll(Filter.has("id"), null)) } catch (Err e2) {}
+    }
 
     return FolioFuture.makeSync(CommitFolioRes(completed))
   }
