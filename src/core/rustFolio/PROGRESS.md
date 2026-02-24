@@ -38,6 +38,7 @@ All milestones and production phases are complete. Recorded here for reference.
 | F1 isSpec filter support | 2026-02-23 | `f964320a` ✅ |
 | N2 Prefix rename | 2026-02-23 | `a03d168e` ✅ |
 | L1 Log format alignment | 2026-02-23 | `dd589dd6` ✅ |
+| O3 Incremental his_stat | 2026-02-23 | `70220ac5` ✅ |
 
 ---
 
@@ -45,25 +46,7 @@ All milestones and production phases are complete. Recorded here for reference.
 
 Ordered by implementation priority. All are tracked in DESIGN.md §16 Future Work.
 
-### 1. O3 — Incremental His_Stat
-
-**Priority:** Medium (performance)
-**Effort:** Small
-**Scope:** Rust only — HIS_WRITE handler
-
-`HIS_STAT (0x0042)` returns a pre-computed stat row from `HISTORY_META`. Currently
-`HIS_WRITE` rewrites the stat row by doing a full range scan of the affected point's
-history after each write. For points with large history sets this becomes O(n) per
-write.
-
-Approach: at write time, compare the incoming min/max against the existing stat row
-and update in place — O(1) per write. A full rescan is only needed if a written item
-falls outside the current range (rare) or if the stat row doesn't yet exist (first
-write). The existing `HIS_STAT` RPC and Fantom stats cache are unchanged.
-
----
-
-### 2. N1 — Chunked readAll Responses
+### 1. N1 — Chunked readAll Responses
 
 **Priority:** Medium (scale safety)
 **Effort:** Medium
@@ -85,7 +68,7 @@ mid-stream).
 
 ---
 
-### 3. S1 — Socket Authentication
+### 2. S1 — Socket Authentication
 
 **Priority:** Medium (security)
 **Effort:** Small-Medium
@@ -103,7 +86,7 @@ constant-time string comparison.
 
 ---
 
-### 4. Namespace Reload Hook (Upstream Contribution)
+### 3. Namespace Reload Hook (Upstream Contribution)
 
 **Priority:** Low (upstream Haxall)
 **Effort:** Small
@@ -122,7 +105,7 @@ the main work is the upstream coordination.
 
 ---
 
-### 5. Performance Benchmarks
+### 4. Performance Benchmarks
 
 **Priority:** Low (validation)
 **Effort:** Medium
