@@ -699,13 +699,20 @@ Decisions are identified by the codes used in `PROGRESS.md`.
 
 The following improvements are planned but not yet implemented:
 
-**Incremental history statistics (O3):** `HIS_STAT` currently returns a pre-computed
-stat row. `HIS_WRITE` updates the stat row in-place (a single metadata write per
-write batch). Incremental stat maintenance (running min/max) can eliminate the
-occasional need for a full history scan on stat correction.
+**Chunked readAll responses (N1):** `READ_ALL` responses are currently single-frame
+with a hard 64 MB cap enforced on both sides. At ~50K+ records the cap becomes
+relevant. The fix is a continuation-frame protocol: a new `READ_ALL_CHUNK` response
+variant streams fixed-size record batches (e.g., 1000 records per chunk), each
+independently framed, followed by an end-of-stream marker. The 64 MB limit becomes a
+per-chunk guard rather than a per-response guard. Fantom's `RustFolioConn.readAll()`
+accumulates chunks transparently. Requires coordinated opcode additions on both sides
+and a design pass for error-mid-stream handling.
 
-**Socket authentication:** A shared-secret handshake in the protocol would be
-appropriate for deployments where per-process isolation is not guaranteed.
+**Socket authentication (S1):** A shared-secret handshake in the protocol would be
+appropriate for deployments where per-process isolation is not guaranteed. Proposed
+approach: at startup, Rust generates a random token written to a temp file (or passed
+via environment variable). Fantom reads the token and includes it in the `HELLO`
+payload. Rust verifies with constant-time comparison and rejects unknown clients.
 
 **Namespace reload hook:** When Xeto libs are added or removed at runtime, the
 Rust-side spec subtype map (used for `isSpec` filter evaluation) goes stale until
