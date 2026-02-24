@@ -85,7 +85,7 @@ the rest of haxall.
 | P3 - Backup | ✅ 2026-02-23 | FolioBackup impl — consistent redb snapshot via logical table copy. BACKUP_CREATE (0x0050) RPC. Gate: ALL GREEN. |
 | P4 - File storage | ✅ 2026-02-23 | FolioFile — Fantom-side disk delegation via LocalFolioFile. Gate: ALL GREEN. |
 | R1 - Reconnect + Transient | ✅ 2026-02-23 | Reconnect-on-failure (kill+respawn, 3 attempts). Transient registry (Fantom-side, replayed on reconnect). Watch bug fixes (RustFolioRec shared instance + ticks fix). status(), isAlive(), Q3 phantom-commit detection. Gate: ALL GREEN. |
-| P5 - Hardening | 🔲 pending | Incremental dis updates (O(n)/commit → dirty-set tracking). Prefix rename. Benchmarking vs hxFolio. |
+| P5 - Hardening | 🔄 in progress | O1 (incremental dis) ✅ bfe2f0b7. Prefix rename, benchmarking pending. |
 
 ### P1 Design — History Persistence
 
