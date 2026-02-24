@@ -228,7 +228,7 @@ const class RustFolio : Folio
     {
       if (c != null) c.close
     }
-    catch (Err e) {}
+    catch (Err e) { log.debug("rust-folio: error closing connection on shutdown", e) }
 
     try
     {
@@ -238,7 +238,7 @@ const class RustFolio : Folio
         if (exitCode == -1) proc.kill
       }
     }
-    catch (Err e) {}
+    catch (Err e) { log.debug("rust-folio: error stopping process on shutdown", e) }
 
     return FolioFuture.makeSync(CountFolioRes(0))
   }

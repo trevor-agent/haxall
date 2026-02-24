@@ -46,12 +46,7 @@ impl<'a> Parser<'a> {
     }
 
     fn is_eof(&self) -> bool {
-        self.skip_ws();
         self.pos >= self.input.len()
-    }
-
-    fn skip_ws(&self) -> () {
-        // Note: skip_ws mutates pos indirectly via peek helpers
     }
 
     fn peek_char(&self) -> Option<char> {
