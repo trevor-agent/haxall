@@ -133,13 +133,6 @@ const class RustFolio : Folio
   **
   private const AtomicInt lastKnownVerRef := AtomicInt(0)
 
-  **
-  ** True once syncSpec() has run with a non-null namespace.
-  ** Used to trigger lazy re-sync on the first isSpec-capable read after boot.
-  ** Reset to false on reconnect so the new process receives a fresh SPEC_UPDATE.
-  **
-  private const AtomicBool specSyncedRef := AtomicBool(false)
-
   private RustFolioConn? conn() { (connRef.val as Unsafe)?.val }
   private RustFolioProcess? rustProcess() { (processRef.val as Unsafe)?.val }
 
@@ -351,7 +344,6 @@ const class RustFolio : Folio
     hisImpl.clearStatsCache
 
     // 9. Sync spec hierarchy — namespace is available by reconnect time
-    specSyncedRef.val = false
     syncSpec
   }
 
@@ -371,16 +363,6 @@ const class RustFolio : Folio
   ** process returns false for all isSpec checks until a subsequent sync sends
   ** a populated map.
   **
-  ** True if the Xeto namespace is currently available via hooks.
-  ** Guarded against FolioHooks implementations that throw UnsupportedErr
-  ** unconditionally (e.g. the test harness hooks used by testFolio).
-  **
-  private Bool nsAvailable()
-  {
-    try { return hooks.ns(false) != null }
-    catch (UnsupportedErr e) { return false }
-  }
-
   Void syncSpec()
   {
     c := conn
@@ -403,7 +385,6 @@ const class RustFolio : Folio
     }
 
     c.specUpdate(subtypeMap)
-    specSyncedRef.val = ns != null
   }
 
   private static Void syncSpecAdd([Str:Str[]] map, Str parent, Str subtype)
@@ -654,8 +635,6 @@ const class RustFolio : Folio
 
   override protected FolioFuture doReadAll(Filter filter, Dict? opts)
   {
-    // Lazy spec sync: fire once after the namespace becomes available post-boot.
-    if (!specSyncedRef.val && nsAvailable) syncSpec
     c := conn ?: throw ShutdownErr("$typeof.name is closed")
     try
     {
@@ -673,8 +652,6 @@ const class RustFolio : Folio
 
   override protected Int doReadCount(Filter filter, Dict? opts)
   {
-    // Lazy spec sync: fire once after the namespace becomes available post-boot.
-    if (!specSyncedRef.val && nsAvailable) syncSpec
     c := conn ?: throw ShutdownErr("$typeof.name is closed")
     try
     {

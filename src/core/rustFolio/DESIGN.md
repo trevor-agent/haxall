@@ -269,11 +269,14 @@ itself). This map is sent to the Rust process via `SPEC_UPDATE`. The Rust evalua
 then resolves `IsSpec(name)` in O(1): look up the record's `spec` Ref id in the
 `spec_subtypes[name]` set.
 
-**Lazy initialization:** The Xeto namespace is typically unavailable at folio
-open time (libs are loaded after the folio is opened). `syncSpec()` sends an empty
-map if the namespace is null. A lazy check in `doReadAll` and `doReadCount` triggers
-a one-time re-sync the first time either is called after the namespace becomes
-available.
+**Initialization:** The Xeto namespace is typically unavailable at folio open
+time (libs are loaded after the folio is opened). `syncSpec()` sends an empty map
+if the namespace is null, leaving Rust with no spec hierarchy. The map is
+populated on the first reconnect, when the namespace is guaranteed to be
+available. Until then, `isSpec` evaluates to false — the same behavior as
+before F1 was implemented. A lazy trigger from within `doReadAll` was considered
+and rejected: during lib initialization, `hooks.ns()` calls back into `doReadAll`
+(to read lib records from folio), creating infinite recursion.
 
 **Runtime lib changes:** If Xeto libs are added or removed at runtime, the Rust-side
 spec map goes stale until the next restart or reconnect. There is no public
