@@ -9,8 +9,13 @@
 | **Remote** | `trevor-agent` → `https://github.com/trevor-agent/haxall` |
 | **Rust** | 1.83.0 |
 | **Fantom/Haxall** | 4.0.5 |
-| **Build** | `fan src/core/rustFolio/build.fan compile` |
+| **Build (Fantom pod)** | `fan src/core/rustFolio/build.fan compile` |
+| **Build (Rust binary)** | `cargo build --release` (in `rust/`) |
 | **Gate** | `fant testFolio` |
+
+> ⚠️ **The gate uses `target/release/rust-folio`** (not the dev build).
+> After any Rust change, run `cargo build --release` before `fant testFolio`
+> or failures will silently test stale code.
 
 ---
 
