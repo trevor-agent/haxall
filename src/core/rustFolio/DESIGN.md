@@ -691,6 +691,7 @@ Decisions are identified by the codes used in `PROGRESS.md`.
 | DEV-013 | Tag presence index in RecordCache | Secondary `HashMap<tag, HashSet<id>>` maintained against the merged view. Enables O(result_set) evaluation for Has-based filter leading terms by intersecting candidate sets before the full filter runs. Falls back to full scan for Or-rooted filters and non-Has leading terms. |
 | DEV-014 | isSpec via pushed spec hierarchy (SPEC_UPDATE) | Rust resolves isSpec in O(1) using a parent→subtypes map pushed from Fantom at open/reconnect. Rejected filter rewriting (Option C): ph::Point has 100–200 subtypes in production; an Or of 200 Eq nodes is worse than a full scan. |
 | DEV-015 | Prefix rename in Server::open(), not via RPC | hxFolio sidesteps prefix rename by storing relative Refs (prefix applied on load). rustFolio stores absolute Refs, so rename requires rewriting all stored data. Performed at startup before accepting connections — no new opcode, no Fantom changes, crash-safe via single write transaction. |
+| DEV-016 | Custom tracing format matching Fantom log convention | Rust subprocess logs write to stderr (merged into JVM stdout by `RustFolioProcess`). Default tracing-subscriber emits UTC ISO-8601 timestamps that stand out against Fantom's `[HH:MM:SS DD-Mon-YY] [level] [tag]` format. Replaced with a custom `FormatEvent` (`FanLogFormat`) using `chrono::Local` for local time and a `PlainVisitor` that bypasses tracing-subscriber's ANSI field formatting. No new dependencies — `chrono` was already in the tree. |
 
 ---
 

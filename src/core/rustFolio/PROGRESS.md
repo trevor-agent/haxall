@@ -37,6 +37,7 @@ All milestones and production phases are complete. Recorded here for reference.
 | O2 Tag presence index | 2026-02-23 | `6b997a4f` ✅ |
 | F1 isSpec filter support | 2026-02-23 | `f964320a` ✅ |
 | N2 Prefix rename | 2026-02-23 | `a03d168e` ✅ |
+| L1 Log format alignment | 2026-02-23 | `dd589dd6` ✅ |
 
 ---
 
