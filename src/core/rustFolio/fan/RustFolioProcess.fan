@@ -97,25 +97,16 @@ class RustFolioProcess
   ** Wait for the process to exit gracefully (after Close opcode was sent).
   ** Returns exit code or -1 on timeout.
   **
+  ** Wait for the process to exit after the Close opcode was sent.
+  ** Process.join() blocks until the process terminates; returns exit code.
+  ** Returns -1 if process is null (already cleaned up).
   Int waitForExit()
   {
-    deadline := Duration.nowTicks + exitTimeout.ticks
-    while (Duration.nowTicks < deadline)
-    {
-      try
-      {
-        // join() blocks; use a 100ms mini-timeout via Actor.sleep + kill check
-        code := process?.join ?: 0
-        process = null
-        return code
-      }
-      catch (Err e)
-      {
-        // join() throws if process is still running (implementation dependent)
-        Actor.sleep(100ms)
-      }
-    }
-    return -1
+    p := process
+    if (p == null) return -1
+    code := p.join
+    process = null
+    return code
   }
 
   **
