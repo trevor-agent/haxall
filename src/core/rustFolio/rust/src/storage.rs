@@ -37,7 +37,7 @@ fn prefix_replace(s: &str, old: &str, new: &str) -> String {
 fn rename_val(val: Val, old: &str, new: &str) -> Val {
     match val {
         Val::Ref(r) if r.id.starts_with(old) => {
-            Val::Ref(HRef { id: format!("{}{}", new, &r.id[old.len()..]), dis: r.dis })
+            Val::Ref(HRef { id: prefix_replace(&r.id, old, new), dis: r.dis })
         }
         Val::List(items) => {
             Val::List(items.into_iter().map(|v| rename_val(v, old, new)).collect())
@@ -151,7 +151,9 @@ impl Storage {
             Some(v)    => {
                 let bytes = v.value();
                 if bytes.len() < 8 {
-                    return Ok(0);
+                    return Err(FolioError::Protocol(
+                        format!("curVer META entry corrupt: expected 8 bytes, got {}", bytes.len())
+                    ));
                 }
                 Ok(u64::from_be_bytes(bytes[..8].try_into().expect("8-byte slice guaranteed by len check above")))
             }

@@ -3,8 +3,9 @@
 // Design note: The reference design specifies Unix domain sockets, but Fantom's
 // Socket class is TCP-only. We use TCP on 127.0.0.1 with an ephemeral port.
 // Security is equivalent (loopback-only). Windows fallback is no longer needed.
-// The port is output to stdout as "READY:{port}" after bind so the Fantom
-// process manager can extract and pass it to the socket client.
+// After binding, the server writes "{port}:{hex-token}" to {dir}/.rust-folio.port
+// and then blocks on accept(). Fantom polls for the port file to get both the
+// port number and the auth token, then connects.
 //
 // Single-threaded request processing matches folio's actor pattern.
 
@@ -79,16 +80,16 @@ impl Server {
         Ok(Server { config, storage, cache, closed: false, token })
     }
 
-    /// Bind TCP listener, signal READY:{port}, serve one connection.
+    /// Bind TCP listener, write port file, serve one connection.
     pub fn run(mut self) -> Result<()> {
         // Bind on ephemeral port (port 0 = OS assigns)
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let port = listener.local_addr()?.port();
 
-        // Signal ready: write "{port}:{hex-token}" to {dir}/.rust-folio.port.
+        // Signal ready: write "{port}:{hex-token}" to the port file.
         // Fantom polls for this file, reads both port and auth token from it.
         // chmod 0600 so only the owning user can read the token.
-        let port_file = self.config.dir.join(".rust-folio.port");
+        let port_file = self.port_file_path();
         let hex_token: String = self.token.iter().map(|b| format!("{:02x}", b)).collect();
         std::fs::write(&port_file, format!("{}:{}", port, hex_token))?;
         Self::chmod_port_file(&port_file)?;
@@ -108,10 +109,14 @@ impl Server {
         tracing::info!("connection closed, exiting");
 
         // Clean up port file
-        let port_file = self.config.dir.join(".rust-folio.port");
-        let _ = std::fs::remove_file(&port_file);
+        let _ = std::fs::remove_file(self.port_file_path());
 
         Ok(())
+    }
+
+    /// Path to the port file written after bind: {dir}/.rust-folio.port
+    fn port_file_path(&self) -> std::path::PathBuf {
+        self.config.dir.join(".rust-folio.port")
     }
 
     fn serve_connection(&mut self, stream: &mut TcpStream) -> Result<()> {
@@ -226,7 +231,10 @@ impl Server {
     fn handle_flush_mode(&self, data: &[u8], pos: &mut usize) -> Result<Vec<u8>> {
         let op = protocol::read_u8(data, pos)?;
         if op == 0x01 {
-            let _mode = protocol::read_str_from(data, pos)?;
+            // SET is a no-op: redb flush behaviour is fixed at open time (fsync
+            // after every write transaction). Read the payload to advance pos,
+            // then return the current mode unchanged.
+            let _requested_mode = protocol::read_str_from(data, pos)?;
         }
         let mut buf = Vec::new();
         protocol::write_str_to(&mut buf, &self.config.flush_mode);
