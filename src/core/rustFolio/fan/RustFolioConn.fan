@@ -94,26 +94,15 @@ class RustFolioConn
     out := s.out
     in  := s.in
 
-    // Decode hex token (64 chars → 32 raw bytes)
-    tokenBuf := Buf(32)
-    (0..<32).each |i|
-    {
-      hi  := hexToken[i*2].fromDigit(16)
-      lo  := hexToken[i*2+1].fromDigit(16)
-      tokenBuf.write((hi.shiftl(4)).or(lo))
-    }
-
     // Send: 4 bytes magic + 2 bytes version + 32 bytes token
     out.writeBuf(magic.seek(0))
     out.writeI2(protoVer)
-    out.writeBuf(tokenBuf.seek(0))
+    out.writeBuf(Buf.fromHex(hexToken).seek(0))
     out.flush
 
     // Read: 4 bytes magic + 2 bytes version + 1 byte status
     respBuf := in.readBufFully(null, 7).seek(0)
-    if (respBuf.read != 'R' || respBuf.read != 'F' ||
-        respBuf.read != 'O' || respBuf.read != 'L')
-      throw IOErr("Bad magic bytes in server handshake response")
+    verifyMagic(respBuf)
     respBuf.readU2  // server version (ignored for now)
     status := respBuf.read
     switch (status)
@@ -412,6 +401,15 @@ class RustFolioConn
     out.writeI2(op)
     if (payload.size > 0) out.writeBuf(payload.seek(0))
     out.flush
+  }
+
+  ** Verify the four magic bytes read from buf match the magic constant.
+  private static Void verifyMagic(Buf buf)
+  {
+    got := Buf(4)
+    4.times { got.write(buf.read) }
+    if (got.toHex != magic.seek(0).toHex)
+      throw IOErr("Bad magic bytes in server handshake response")
   }
 
   private Buf readResponse(Int expectedOp)

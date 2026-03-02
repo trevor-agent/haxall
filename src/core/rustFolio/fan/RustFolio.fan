@@ -784,7 +784,7 @@ const class RustFolio : Folio
     catch (Err e)
     {
       log.err("rust-folio incremental dis update failed; falling back to full sweep", e)
-      try { disMgr.updateAll(c.readAll(Filter.has("id"), null)) } catch (Err e2) {}
+      try { disMgr.updateAll(c.readAll(Filter.has("id"), null)) } catch (Err e2) { log.err("rust-folio full dis sweep also failed", e2) }
     }
 
     // One-time spec sync: on the first persistent commit after the Xeto namespace

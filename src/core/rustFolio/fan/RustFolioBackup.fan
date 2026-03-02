@@ -40,8 +40,8 @@ const class RustFolioBackup : FolioBackup
     this.dir   = folio.dir + `../backup/`
   }
 
-  const RustFolio folio
-  const File dir
+  private const RustFolio folio
+  private const File dir
 
   private const ActorPool pool          := ActorPool.make
   private const AtomicBool inProgressRef := AtomicBool(false)
@@ -109,7 +109,7 @@ const class RustFolioBackup : FolioBackup
     // Completable future resolved by the background actor.
     f := Future.makeCompletable
 
-    // Capture values needed by the closure.  All are const/immutable.
+    // Capture values needed by the background worker.  All are const/immutable.
     bFolio  := folio
     bTmp    := tmpFile
     bZip    := zipFile
@@ -120,38 +120,44 @@ const class RustFolioBackup : FolioBackup
 
     Actor.make(pool) |msg->Obj?|
     {
-      try
-      {
-        // Step 1 — ask Rust for a consistent snapshot at the temp path.
-        c := bFolio.connForBackup ?: throw ShutdownErr("RustFolio is closed")
-        c.backupCreate(bTmp.osPath)
-
-        // Step 2 — zip the snapshot into the backup directory.
-        zip := Zip.write(bZip.out)
-        out := zip.writeNext(Uri.fromStr("${bName}-${bTs}/db/db.redb"))
-        bTmp.in.pipe(out)  // pipe() closes both bTmp.in and out (finalizes the entry)
-        zip.close
-
-        // Step 3 — remove temp snapshot.
-        bTmp.delete
-
-        bStatus.val = "last:${bTs}"
-        f.complete(CountFolioRes(0))
-      }
-      catch (Err e)
-      {
-        try { bTmp.delete } catch {}
-        bStatus.val = "error:${e.msg}"
-        f.completeErr(e)
-      }
-      finally
-      {
-        bInProg.val = false
-      }
+      doBackupWork(bFolio, bTmp, bZip, bName, bTs, bInProg, bStatus, f)
       return null
     }.send(null)
 
     return FolioFuture.makeAsync(f)
+  }
+
+  ** Execute backup work on the background actor thread.
+  ** Step 1: ask Rust for a consistent redb snapshot at tmpFile.
+  ** Step 2: zip the snapshot into zipFile.
+  ** Step 3: delete the temp snapshot.
+  private static Void doBackupWork(RustFolio bFolio, File bTmp, File bZip,
+                                   Str bName, Str bTs,
+                                   AtomicBool bInProg, AtomicRef bStatus,
+                                   Future f)
+  {
+    try
+    {
+      c := bFolio.connForBackup ?: throw ShutdownErr("RustFolio is closed")
+      c.backupCreate(bTmp.osPath)
+      zip := Zip.write(bZip.out)
+      out := zip.writeNext(Uri.fromStr("${bName}-${bTs}/db/db.redb"))
+      bTmp.in.pipe(out)  // pipe() closes both bTmp.in and out (finalizes the entry)
+      zip.close
+      bTmp.delete
+      bStatus.val = "last:${bTs}"
+      f.complete(CountFolioRes(0))
+    }
+    catch (Err e)
+    {
+      try { bTmp.delete } catch (Err ignore) {}
+      bStatus.val = "error:${e.msg}"
+      f.completeErr(e)
+    }
+    finally
+    {
+      bInProg.val = false
+    }
   }
 
   **

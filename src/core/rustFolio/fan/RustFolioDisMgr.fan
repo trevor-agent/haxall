@@ -153,7 +153,7 @@ const class RustFolioDisMgr
   ** resolve to the id string rather than looping forever — matching
   ** hxFolio's DisMgr.toDis behaviour exactly.
   **
-  Str toDis(Str idStr, Str:Dict idToDict, Str:Str newCache)
+  internal Str toDis(Str idStr, Str:Dict idToDict, Str:Str newCache)
   {
     // Memoized?
     x := newCache[idStr]
